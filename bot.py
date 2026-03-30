@@ -8,7 +8,7 @@ OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY")
 
 models = [
     {"name": "DeepSeek R1", "id": "deepseek/deepseek-r1:free"},
-    {"name": "DeepSeek V3", "id": "deepseek/deepseek-chat-v3-0324:free"},
+    {"name": "NVIDIA: Nemotron 3 Super (free)", "id": "nvidia/nemotron-3-super-120b-a12b:free"},
     {"name": "Gemini 2.0 Flash", "id": "google/gemini-2.0-flash-exp:free"},
     {"name": "Gemini 2.5 Pro", "id": "google/gemini-2.5-pro-exp-03-25:free"},
     {"name": "Llama 4 Maverick", "id": "meta-llama/llama-4-maverick:free"},
