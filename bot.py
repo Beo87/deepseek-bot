@@ -20,7 +20,7 @@ models = [
     {"name": "Llama 4 Maverick (OR)", "id": "meta-llama/llama-4-maverick:free", "provider": "openrouter"},
     {"name": "Mistral Small (OR)", "id": "mistralai/mistral-small-3.1-24b-instruct:free", "provider": "openrouter"},
     # GitHub Models free
-    {"name": "GPT-4o (GH)", "id": "openai/gpt-4o", "provider": "github"},
+    {"name": "GPT-4o (GH)", "id": "openai/gpt-4o-mini", "provider": "github"},
     {"name": "DeepSeek R1 (GH)", "id": "deepseek/DeepSeek-R1", "provider": "github"},
     {"name": "DeepSeek V3 (GH)", "id": "deepseek/DeepSeek-V3-0324", "provider": "github"},
     {"name": "Grok 3 Mini (GH)", "id": "xai/grok-3-mini", "provider": "github"},
