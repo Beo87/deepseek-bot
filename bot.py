@@ -308,7 +308,7 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         user_data[user_id]["messages"].append({"role": "assistant", "content": tra_loi})
         if len(tra_loi) > 4096:
-            tra_loi = tra_loi[:4090] + "..."
+            tra_loi = tra_loi[:4090& + "..."
         await update.message.reply_text(user_data[user_id]["model_name"] + ":\n\n" + tra_loi)
     except Exception as e:
         await update.message.reply_text("Loi: " + str(e))
