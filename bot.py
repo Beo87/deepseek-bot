@@ -178,7 +178,7 @@ def web_search(query, max_results=5):
 def tao_anh(prompt):
     try:
         r = requests.post(
-            "https://router.huggingface.co/hf-inference/models/stabilityai/stable-diffusion-xl-base-1.0",
+            "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
             headers={"Authorization": "Bearer " + HF_API_KEY},
             json={"inputs": prompt},
             timeout=60
