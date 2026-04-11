@@ -157,40 +157,19 @@ def goi_ai_voi_fallback(user_id, messages):
 
 def web_search(query, max_results=5):
     try:
-        from html.parser import HTMLParser
-        headers = {"User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)"}
         r = requests.get(
-            "https://html.duckduckgo.com/html/",
-            params={"q": query},
-            headers=headers,
+            "https://api.duckduckgo.com/",
+            params={"q": query, "format": "json", "no_redirect": 1, "no_html": 1},
             timeout=10
         )
-
-        class DDGParser(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.results = []
-                self.in_result = False
-                self.current = ""
-            def handle_starttag(self, tag, attrs):
-                attrs = dict(attrs)
-                if tag == "a" and "result__a" in attrs.get("class", ""):
-                    self.in_result = True
-                    self.current = ""
-            def handle_endtag(self, tag):
-                if tag == "a" and self.in_result:
-                    self.in_result = False
-                    if self.current.strip():
-                        self.results.append(self.current.strip())
-            def handle_data(self, data):
-                if self.in_result:
-                    self.current += data
-
-        parser = DDGParser()
-        parser.feed(r.text)
-        if parser.results:
-            return "\n".join("- " + t for t in parser.results[:max_results])
-        return "Không tìm thấy kết quả cho: " + query
+        data = r.json()
+        results = []
+        if data.get("AbstractText"):
+            results.append("Tóm tắt: " + data["AbstractText"])
+        for topic in data.get("RelatedTopics", [])[:max_results]:
+            if isinstance(topic, dict) and topic.get("Text"):
+                results.append("- " + topic["Text"])
+        return "\n".join(results) if results else "Không tìm thấy kết quả cho: " + query
     except Exception as e:
         return "Loi web search: " + str(e)
 
@@ -283,42 +262,7 @@ def create_file_github(path, content, message="Create via Telegram bot"):
         json={"message": message, "content": encoded}
     )
     return r.status_code == 201
-# ===== MEMORY FUNCTIONS =====
 
-def load_memory(user_id):
-    """Đọc memory của user từ GitHub"""
-    content, sha = get_file(MEMORY_FILE)
-    if content is None:
-        return {}, None
-    try:
-        data = json.loads(content)
-        return data.get(str(user_id), {}), sha
-    except:
-        return {}, None
-
-def save_memory(user_id, memory_dict):
-    """Lưu memory của user lên GitHub"""
-    content, sha = get_file(MEMORY_FILE)
-    try:
-        all_memory = json.loads(content) if content else {}
-    except:
-        all_memory = {}
-    all_memory[str(user_id)] = memory_dict
-    new_content = json.dumps(all_memory, ensure_ascii=False, indent=2)
-    if sha:
-        update_file(MEMORY_FILE, new_content, sha, "Update memory")
-    else:
-        create_file_github(MEMORY_FILE, new_content, "Create memory")
-
-def memory_to_system(memory_dict):
-    """Chuyển memory thành đoạn text inject vào system prompt"""
-    if not memory_dict:
-        return ""
-    lines = ["Thong tin nguoi dung ban can nho:"]
-    for k, v in memory_dict.items():
-        lines.append("- " + k + ": " + str(v))
-    return "\n".join(lines)
-    
 # ===== BOT COMMANDS =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -546,15 +490,8 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Ghép system prompt
     messages_to_send = []
-    memory, _ = load_memory(user_id)
-    memory_text = memory_to_system(memory)
-    system_parts = []
     if d.get("system_prompt"):
-        system_parts.append(d["system_prompt"])
-    if memory_text:
-        system_parts.append(memory_text)
-    if system_parts:
-        messages_to_send.append({"role": "system", "content": "\n\n".join(system_parts)})
+        messages_to_send.append({"role": "system", "content": d["system_prompt"]})
     messages_to_send.extend(d["messages"])
 
     # Gọi AI với auto-fallback
