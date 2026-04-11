@@ -157,19 +157,40 @@ def goi_ai_voi_fallback(user_id, messages):
 
 def web_search(query, max_results=5):
     try:
+        from html.parser import HTMLParser
+        headers = {"User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)"}
         r = requests.get(
-            "https://api.duckduckgo.com/",
-            params={"q": query, "format": "json", "no_redirect": 1, "no_html": 1},
+            "https://html.duckduckgo.com/html/",
+            params={"q": query},
+            headers=headers,
             timeout=10
         )
-        data = r.json()
-        results = []
-        if data.get("AbstractText"):
-            results.append("Tóm tắt: " + data["AbstractText"])
-        for topic in data.get("RelatedTopics", [])[:max_results]:
-            if isinstance(topic, dict) and topic.get("Text"):
-                results.append("- " + topic["Text"])
-        return "\n".join(results) if results else "Không tìm thấy kết quả cho: " + query
+
+        class DDGParser(HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.results = []
+                self.in_result = False
+                self.current = ""
+            def handle_starttag(self, tag, attrs):
+                attrs = dict(attrs)
+                if tag == "a" and "result__a" in attrs.get("class", ""):
+                    self.in_result = True
+                    self.current = ""
+            def handle_endtag(self, tag):
+                if tag == "a" and self.in_result:
+                    self.in_result = False
+                    if self.current.strip():
+                        self.results.append(self.current.strip())
+            def handle_data(self, data):
+                if self.in_result:
+                    self.current += data
+
+        parser = DDGParser()
+        parser.feed(r.text)
+        if parser.results:
+            return "\n".join("- " + t for t in parser.results[:max_results])
+        return "Không tìm thấy kết quả cho: " + query
     except Exception as e:
         return "Loi web search: " + str(e)
 
