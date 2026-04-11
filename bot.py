@@ -283,7 +283,42 @@ def create_file_github(path, content, message="Create via Telegram bot"):
         json={"message": message, "content": encoded}
     )
     return r.status_code == 201
+# ===== MEMORY FUNCTIONS =====
 
+def load_memory(user_id):
+    """Đọc memory của user từ GitHub"""
+    content, sha = get_file(MEMORY_FILE)
+    if content is None:
+        return {}, None
+    try:
+        data = json.loads(content)
+        return data.get(str(user_id), {}), sha
+    except:
+        return {}, None
+
+def save_memory(user_id, memory_dict):
+    """Lưu memory của user lên GitHub"""
+    content, sha = get_file(MEMORY_FILE)
+    try:
+        all_memory = json.loads(content) if content else {}
+    except:
+        all_memory = {}
+    all_memory[str(user_id)] = memory_dict
+    new_content = json.dumps(all_memory, ensure_ascii=False, indent=2)
+    if sha:
+        update_file(MEMORY_FILE, new_content, sha, "Update memory")
+    else:
+        create_file_github(MEMORY_FILE, new_content, "Create memory")
+
+def memory_to_system(memory_dict):
+    """Chuyển memory thành đoạn text inject vào system prompt"""
+    if not memory_dict:
+        return ""
+    lines = ["Thong tin nguoi dung ban can nho:"]
+    for k, v in memory_dict.items():
+        lines.append("- " + k + ": " + str(v))
+    return "\n".join(lines)
+    
 # ===== BOT COMMANDS =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -511,8 +546,15 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Ghép system prompt
     messages_to_send = []
+    memory, _ = load_memory(user_id)
+    memory_text = memory_to_system(memory)
+    system_parts = []
     if d.get("system_prompt"):
-        messages_to_send.append({"role": "system", "content": d["system_prompt"]})
+        system_parts.append(d["system_prompt"])
+    if memory_text:
+        system_parts.append(memory_text)
+    if system_parts:
+        messages_to_send.append({"role": "system", "content": "\n\n".join(system_parts)})
     messages_to_send.extend(d["messages"])
 
     # Gọi AI với auto-fallback
