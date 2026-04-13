@@ -89,20 +89,13 @@ def hf_image(prompt):
         return None
 
 # BOT
-user_memory = {}
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🔥 BOT SaaS
-"
-        "💬 Chat
-"
-        "🎨 /imagine prompt
-"
-        "💳 /upgrade
-"
-        "♻️ /reset
-"
+        "🔥 BOT SaaS\n"
+        "💬 Chat\n"
+        "🎨 /imagine prompt\n"
+        "💳 /upgrade\n"
+        "♻️ /reset\n"
     )
 
 async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
