@@ -100,7 +100,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 "
         "💳 /upgrade
 "
-        "♻️ /reset"
+        "♻️ /reset
+"
     )
 
 async def upgrade(update: Update, context: ContextTypes.DEFAULT_TYPE):
