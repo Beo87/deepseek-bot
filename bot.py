@@ -153,18 +153,25 @@ async def chat(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply[:4000])
 
 # RUN BOTH
+http_request = HTTPXRequest(connect_timeout=10.0, read_timeout=10.0)
+
 def run_api():
-    uvicorn.run(app_api, host="0.0.0.0", port=8000)
+    uvicorn.run("bot:app_api", host="0.0.0.0", port=int(os.environ.get("PORT", 8000)), log_level="info")
 
-threading.Thread(target=run_api).start()
+threading.Thread(target=run_api, daemon=True).start()
 
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
+app = ApplicationBuilder().token(TELEGRAM_TOKEN).request(http_request).build()
+# ... add_handler giống cũ ...
 
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("upgrade", upgrade))
-app.add_handler(CommandHandler("reset", reset))
-app.add_handler(CommandHandler("imagine", imagine))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, chat))
+# Set webhook (chạy 1 lần hoặc manual)
+WEBHOOK_URL = f"https://{os.environ.get('RAILWAY_STATIC_URL', 'your-app.railway.app')}/webhook_telegram"
+app.bot.set_webhook(WEBHOOK_URL)
 
-print("🚀 SaaS BOT running (1 service)")
-app.run_polling()
+@app_api.post("/webhook_telegram")
+async def telegram_webhook(request: Request):
+    update = Update.de_json(await request.json(), app.bot)
+    await app.process_update(update)
+    return {"ok": True}
+
+print("🚀 Bot on Railway webhook")
+app.run_polling()  # Backup, nhưng webhook chính
