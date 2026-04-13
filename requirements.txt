@@ -1,3 +1,6 @@
 python-telegram-bot
 requests
 pycryptodome
+google-generativeai
+fastapi
+uvicorn
