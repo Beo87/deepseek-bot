@@ -1,4 +1,11 @@
-import os import requests import threading import google.generativeai as genai from fastapi import FastAPI import uvicorn from telegram import Update from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
+import os 
+import requests 
+import threading 
+import google.generativeai as genai 
+from fastapi import FastAPI 
+import uvicorn 
+from telegram import Update 
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
 ===== ENV =====
 
