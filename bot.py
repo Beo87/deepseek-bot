@@ -4,6 +4,7 @@ import threading
 import google.generativeai as genai
 from fastapi import FastAPI
 import uvicorn
+from telegram.request import HTTPXRequest
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
