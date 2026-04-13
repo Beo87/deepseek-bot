@@ -9,7 +9,10 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, fil
 
 ===== ENV =====
 
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN") NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY") HF_API_KEY = os.environ.get("HF_API_KEY") GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN") 
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY") 
+HF_API_KEY = os.environ.get("HF_API_KEY") 
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 
 ===== GEMINI =====
 
