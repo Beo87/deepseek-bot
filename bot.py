@@ -9,8 +9,8 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 # ===== ENV VARIABLES =====
 TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_TOKEN")
 NVIDIA_API_KEY  = os.environ.get("NVIDIA_API_KEY")
-GITHUB_TOKEN    = os.environ.get("GITHUB_TOKEN")
-GITHUB_REPO     = os.environ.get("GITHUB_REPO")
+GITHUB_TOKEN    = os.environ.get("GIHUB_TOKEN")
+GITHUB_REPO     = os.environ.get("GIHUB_REPO")
 GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY")
 
 # ===== FILES TREN GITHUB =====
@@ -85,18 +85,18 @@ def parse_error(data, prefix):
 # ===== GITHUB FUNCTIONS =====
 
 def github_headers():
-    return {"Authorization": "token " + GITHUB_TOKEN, "Accept": "application/vnd.github.v3+json"}
+    return {"Authorization": "token " + GIHUB_TOKEN, "Accept": "application/vnd.github.v3+json"}
 
 def list_files(path=""):
     r = requests.get(
-        "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + path,
+        "https://api.github.com/repos/" + GIHUB_REPO + "/contents/" + path,
         headers=github_headers()
     )
     return r.json() if r.status_code == 200 else None
 
 def get_file(path):
     r = requests.get(
-        "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + path,
+        "https://api.github.com/repos/" + GIHUB_REPO + "/contents/" + path,
         headers=github_headers()
     )
     if r.status_code == 200:
@@ -107,7 +107,7 @@ def get_file(path):
 def update_file(path, content, sha, message="Update via bot"):
     encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
     r = requests.put(
-        "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + path,
+        "https://api.github.com/repos/" + GIHUB_REPO + "/contents/" + path,
         headers=github_headers(),
         json={"message": message, "content": encoded, "sha": sha}
     )
@@ -116,7 +116,7 @@ def update_file(path, content, sha, message="Update via bot"):
 def create_file_github(path, content, message="Create via bot"):
     encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
     r = requests.put(
-        "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + path,
+        "https://api.github.com/repos/" + GIHUB_REPO + "/contents/" + path,
         headers=github_headers(),
         json={"message": message, "content": encoded}
     )
