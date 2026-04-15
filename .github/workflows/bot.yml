@@ -11,7 +11,7 @@ jobs:
     timeout-minutes: 300  # chạy tối đa 5 tiếng
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -23,7 +23,7 @@ jobs:
 
       - name: Run bot
         env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: ${{ secrets.FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 }}
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: ${{ true }}
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GIHUB_TOKEN }}
