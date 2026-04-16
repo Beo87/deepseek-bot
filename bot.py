@@ -5,8 +5,8 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN")
-GITHUB_REPO = os.environ.get("GITHUB_REPO")
+GITHUB_TOKEN = os.environ.get("GIHUB_TOKEN")
+GITHUB_REPO = os.environ.get("GIHUB_REPO")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 HF_API_KEY = os.environ.get("HF_API_KEY")
 
