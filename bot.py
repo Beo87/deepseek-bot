@@ -65,6 +65,8 @@ models = [
     # Khác
     {"name": "MiniMax M2.5",         "id": "minimaxai/minimax-m2.5",                       "provider": "nvidia"},
     {"name": "IBM Granite 3.3",      "id": "ibm/granite-3_3-8b-instruct",                  "provider": "nvidia"},
+    {"name": "GLM5.1",               "id": "zai-org/GLM-5.1",                              "provider": "nvidia"},
+]
 ]
 
 user_data  = {}
