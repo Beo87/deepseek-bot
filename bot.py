@@ -251,22 +251,26 @@ def web_search(query, max_results=5):
 # ===== SKILL: IMAGE GENERATION (Gemini 2.0 Flash) =====
 
 def tao_anh(prompt):
+def tao_anh(prompt):
     try:
         r = requests.post(
-            "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
+            "https://api-inference.huggingface.co/models/stabilityai/stable-diffusion-xl-base-1.0",
             headers={"Authorization": "Bearer " + HF_API_KEY},
             json={"inputs": prompt},
             timeout=60
         )
-        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+
+        if r.status_code == 200:
             return r.content
+
         try:
             err = r.json()
             return "Loi tao anh: " + str(err.get("error", r.text))
         except:
             return "Loi tao anh (status " + str(r.status_code) + ")"
+
     except requests.exceptions.Timeout:
-        return "Timeout: Model dang load, thu lai sau 30 giay"
+        return "⏳ Model dang load, thu lai sau 10-20s"
     except Exception as e:
         return "Loi tao anh: " + str(e)
 # ===== SKILL: PHAN TICH ANH (Llama 4 Vision) =====
