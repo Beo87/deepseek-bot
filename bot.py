@@ -9,6 +9,7 @@ GITHUB_TOKEN = os.environ.get("GIHUB_TOKEN")
 GITHUB_REPO = os.environ.get("GIHUB_REPO")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 HF_API_KEY = os.environ.get("HF_API_KEY")
+MEMORY_FILE = "memory.json"  # tên file trên GitHub repo
 
 # ===== DANH SACH MODEL NVIDIA NIM =====
 # Chỉ giữ các model chat tốt nhất, bỏ model quá cũ/chuyên biệt
@@ -124,26 +125,22 @@ def goi_nvidia(model_id, messages, timeout=45):
     except Exception as e:
         return "Loi ket noi: " + str(e), "error"
 
-def goi_ai_voi_fallback(user_id, messages):
-    """
-    Gọi AI với auto-fallback.
-    Trả về (response_text, final_model_id, did_switch)
-    """
-    d = user_data[user_id]
-    current_id = d["model_id"]
-    tried = set()
+# Gọi AI
+    tra_loi, err_type = goi_nvidia(d["model_id"], messages_to_send)
 
-    model_id = current_id
-    while True:
-        content, err_type = goi_nvidia(model_id, messages)
-        if err_type is None:
-            # Thành công
-            did_switch = (model_id != current_id)
-            if did_switch:
-                # Cập nhật model trong user_data
-                d["model_id"] = model_id
-                d["model_name"] = get_model_name(model_id)
-            return content, model_id, did_switch
+    if err_type == "timeout":
+        d["messages"].pop()  # xóa tin vừa thêm
+        await update.message.reply_text("⏱ Timeout! Vui long thu lai hoac doi /model khac.")
+        return
+    if err_type == "error":
+        d["messages"].pop()
+        await update.message.reply_text("❌ Loi: " + tra_loi)
+        return
+
+    d["messages"].append({"role": "assistant", "content": tra_loi})
+    if len(tra_loi) > 4096:
+        tra_loi = tra_loi[:4090] + "..."
+    await update.message.reply_text(d["model_name"] + ":\n\n" + tra_loi)
 
         # Lỗi → thử fallback
         tried.add(model_id)
@@ -262,6 +259,41 @@ def create_file_github(path, content, message="Create via Telegram bot"):
         json={"message": message, "content": encoded}
     )
     return r.status_code == 201
+    # ===== MEMORY FUNCTIONS =====
+
+def load_memory(user_id):
+    """Đọc memory của user từ GitHub"""
+    content, sha = get_file(MEMORY_FILE)
+    if content is None:
+        return {}, None
+    try:
+        data = json.loads(content)
+        return data.get(str(user_id), {}), sha
+    except:
+        return {}, None
+
+def save_memory(user_id, memory_dict):
+    """Lưu memory của user lên GitHub"""
+    content, sha = get_file(MEMORY_FILE)
+    try:
+        all_memory = json.loads(content) if content else {}
+    except:
+        all_memory = {}
+    all_memory[str(user_id)] = memory_dict
+    new_content = json.dumps(all_memory, ensure_ascii=False, indent=2)
+    if sha:
+        update_file(MEMORY_FILE, new_content, sha, "Update memory")
+    else:
+        create_file_github(MEMORY_FILE, new_content, "Create memory")
+
+def memory_to_system(memory_dict):
+    """Chuyển memory thành đoạn text inject vào system prompt"""
+    if not memory_dict:
+        return ""
+    lines = ["Thong tin nguoi dung ban can nho:"]
+    for k, v in memory_dict.items():
+        lines.append("- " + k + ": " + str(v))
+    return "\n".join(lines)
 
 # ===== BOT COMMANDS =====
 
@@ -461,7 +493,63 @@ async def xu_ly_anh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     tin_nhan = update.message.text
+# ===== TU DONG NHAN LENH TAT =====
+    tin_lower = tin_nhan.strip().lower()
 
+    if tin_lower.startswith("imagine "):
+        prompt = tin_nhan[8:].strip()
+        await update.message.reply_text("🎨 Dang tao anh, vui long cho...")
+        await update.message.reply_chat_action("upload_photo")
+        result = tao_anh(prompt)
+        if isinstance(result, bytes):
+            await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
+        else:
+            await update.message.reply_text(result)
+        return
+
+    if tin_lower.startswith("search "):
+        query = tin_nhan[7:].strip()
+        await update.message.reply_chat_action("typing")
+        result = web_search(query)
+        await update.message.reply_text("🔍 " + query + "\n\n" + result)
+        return
+
+    if tin_lower.startswith("remember "):
+        args = tin_nhan[9:].strip().split()
+        memory, _ = load_memory(user_id)
+        for arg in args:
+            if "=" in arg:
+                k, v = arg.split("=", 1)
+                memory[k.strip()] = v.strip()
+        save_memory(user_id, memory)
+        await update.message.reply_text("✅ Da luu memory!")
+        return
+
+    if tin_lower == "remember":
+        memory, _ = load_memory(user_id)
+        if not memory:
+            await update.message.reply_text("Memory trong. Vi du: remember ten=Nam")
+            return
+        text = "🧠 Memory:\n\n"
+        for k, v in memory.items():
+            text += "- " + k + ": " + str(v) + "\n"
+        await update.message.reply_text(text)
+        return
+
+    if tin_lower.startswith("forget "):
+        key = tin_nhan[7:].strip()
+        if key == "all":
+            save_memory(user_id, {})
+            await update.message.reply_text("✅ Da xoa toan bo memory!")
+        else:
+            memory, _ = load_memory(user_id)
+            if key in memory:
+                del memory[key]
+                save_memory(user_id, memory)
+                await update.message.reply_text("✅ Da xoa: " + key)
+            else:
+                await update.message.reply_text("Khong tim thay: " + key)
+        return
     # Chế độ edit/create file
     if user_id in edit_state:
         state = edit_state[user_id]
@@ -490,8 +578,15 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Ghép system prompt
     messages_to_send = []
+    memory, _ = load_memory(user_id)
+    memory_text = memory_to_system(memory)
+    system_parts = []
     if d.get("system_prompt"):
-        messages_to_send.append({"role": "system", "content": d["system_prompt"]})
+        system_parts.append(d["system_prompt"])
+    if memory_text:
+        system_parts.append(memory_text)
+    if system_parts:
+        messages_to_send.append({"role": "system", "content": "\n\n".join(system_parts)})
     messages_to_send.extend(d["messages"])
 
     # Gọi AI với auto-fallback
@@ -512,6 +607,46 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         switch_notice + d["model_name"] + ":\n\n" + tra_loi
     )
+    # Lưu thông tin 
+   async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Lưu thông tin vào memory: /remember tên=Nam tuổi=25"""
+    user_id = update.message.from_user.id
+    if not context.args:
+        memory, _ = load_memory(user_id)
+        if not memory:
+            await update.message.reply_text("Memory trong. Dung:\n/remember ten=Nam nghe=lap trinh")
+            return
+        text = "🧠 Memory cua ban:\n\n"
+        for k, v in memory.items():
+            text += "- " + k + ": " + str(v) + "\n"
+        await update.message.reply_text(text)
+        return
+    memory, _ = load_memory(user_id)
+    for arg in context.args:
+        if "=" in arg:
+            k, v = arg.split("=", 1)
+            memory[k.strip()] = v.strip()
+    save_memory(user_id, memory)
+    await update.message.reply_text("✅ Da luu memory!")
+
+async def forget(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Xóa memory: /forget ten  hoặc /forget all"""
+    user_id = update.message.from_user.id
+    if not context.args:
+        await update.message.reply_text("Dung: /forget ten\nHoac: /forget all")
+        return
+    if context.args[0] == "all":
+        save_memory(user_id, {})
+        await update.message.reply_text("✅ Da xoa toan bo memory!")
+        return
+    memory, _ = load_memory(user_id)
+    key = context.args[0]
+    if key in memory:
+        del memory[key]
+        save_memory(user_id, memory)
+        await update.message.reply_text("✅ Da xoa: " + key)
+    else:
+        await update.message.reply_text("Khong tim thay key: " + key)
 
 # ===== CHAY BOT =====
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
@@ -530,6 +665,7 @@ app.add_handler(CommandHandler("cancel", cancel))
 app.add_handler(CallbackQueryHandler(xu_ly_chon_model, pattern="^model_"))
 app.add_handler(MessageHandler(filters.PHOTO, xu_ly_anh))
 app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, xu_ly_tin_nhan))
-
+app.add_handler(CommandHandler("remember", remember))
+app.add_handler(CommandHandler("forget", forget))
 print("Bot dang chay voi NVIDIA NIM + auto-fallback...")
 app.run_polling()
