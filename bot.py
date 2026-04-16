@@ -601,46 +601,6 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         switch_notice + d["model_name"] + ":\n\n" + tra_loi
     )
-    # Lưu thông tin 
-   async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Lưu thông tin vào memory: /remember tên=Nam tuổi=25"""
-    user_id = update.message.from_user.id
-    if not context.args:
-        memory, _ = load_memory(user_id)
-        if not memory:
-            await update.message.reply_text("Memory trong. Dung:\n/remember ten=Nam nghe=lap trinh")
-            return
-        text = "🧠 Memory cua ban:\n\n"
-        for k, v in memory.items():
-            text += "- " + k + ": " + str(v) + "\n"
-        await update.message.reply_text(text)
-        return
-    memory, _ = load_memory(user_id)
-    for arg in context.args:
-        if "=" in arg:
-            k, v = arg.split("=", 1)
-            memory[k.strip()] = v.strip()
-    save_memory(user_id, memory)
-    await update.message.reply_text("✅ Da luu memory!")
-
-async def forget(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Xóa memory: /forget ten  hoặc /forget all"""
-    user_id = update.message.from_user.id
-    if not context.args:
-        await update.message.reply_text("Dung: /forget ten\nHoac: /forget all")
-        return
-    if context.args[0] == "all":
-        save_memory(user_id, {})
-        await update.message.reply_text("✅ Da xoa toan bo memory!")
-        return
-    memory, _ = load_memory(user_id)
-    key = context.args[0]
-    if key in memory:
-        del memory[key]
-        save_memory(user_id, memory)
-        await update.message.reply_text("✅ Da xoa: " + key)
-    else:
-        await update.message.reply_text("Khong tim thay key: " + key)
 
 # ===== CHAY BOT =====
 app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
