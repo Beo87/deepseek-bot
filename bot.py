@@ -142,13 +142,7 @@ def goi_nvidia(model_id, messages, timeout=45):
         tra_loi = tra_loi[:4090] + "..."
     await update.message.reply_text(d["model_name"] + ":\n\n" + tra_loi)
 
-        # Lỗi → thử fallback
-        tried.add(model_id)
-        next_id = get_next_fallback(model_id, tried)
-        if next_id is None:
-            # Hết model để thử
-            return "Tat ca model deu loi hoac timeout. Vui long thu lai sau.", current_id, False
-        model_id = next_id
+    
 
 # ===== SKILL: WEB SEARCH (DuckDuckGo) =====
 
