@@ -251,29 +251,25 @@ def web_search(query, max_results=5):
 # ===== SKILL: IMAGE GENERATION (Gemini 2.0 Flash) =====
 
 def tao_anh(prompt):
-    MODELS = [
-        "stabilityai/stable-diffusion-xl-base-1.0",
-        "runwayml/stable-diffusion-v1-5",
-        "prompthero/openjourney"
-    ]
-
-    for model in MODELS:
+    try:
+        r = requests.post(
+            "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
+            headers={"Authorization": "Bearer " + HF_API_KEY},
+            json={"inputs": prompt},
+            timeout=60
+        )
+        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+            return r.content
         try:
-            r = requests.post(
-                f"https://api-inference.huggingface.co/models/{model}",
-                headers={"Authorization": "Bearer " + HF_API_KEY},
-                json={"inputs": prompt},
-                timeout=60
-            )
-
-            if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
-                return r.content
-
+            err = r.json()
+            return "Loi tao anh: " + str(err.get("error", r.text))
         except:
-            continue
-
-    return "❌ Tat ca model deu loi. Thu lai sau!"
-    
+            return "Loi tao anh (status " + str(r.status_code) + ")"
+    except requests.exceptions.Timeout:
+        return "Timeout: Model dang load, thu lai sau 30 giay"
+    except Exception as e:
+        return "Loi tao anh: " + str(e)
+        
 # ===== SKILL: PHAN TICH ANH (Llama 4 Vision) =====
 
 def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"):
