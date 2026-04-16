@@ -23,7 +23,7 @@ jobs:
 
       - name: Run bot
         env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: ${{ secrets.FORCE_JAVASCRIPT_ACTIONS_TO_NODE24 }}
+  
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GIHUB_TOKEN }}
