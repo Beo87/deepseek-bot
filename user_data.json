@@ -1,0 +1,8 @@
+{
+  "1717145408": {
+    "model_id": "google/gemma-4-31b-it",
+    "model_name": "Gemma 4 31B",
+    "provider": "nvidia",
+    "system_prompt": ""
+  }
+}
