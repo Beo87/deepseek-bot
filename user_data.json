@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "google/gemma-2-27b-it",
-    "model_name": "Gemma 2 27B",
+    "model_id": "google/gemma-3-27b-it",
+    "model_name": "Gemma 3 27B",
     "provider": "nvidia",
     "system_prompt": ""
   }
