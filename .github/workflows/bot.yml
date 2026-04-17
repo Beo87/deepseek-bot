@@ -8,7 +8,7 @@ on:
 jobs:
   bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 300  # chạy tối đa 5 tiếng
+    timeout-minutes: 720  # chạy tối đa 5 tiếng
 
     steps:
       - uses: actions/checkout@v4
