@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "google/gemma-4-31b-it",
-    "model_name": "Gemma 4 31B",
+    "model_id": "mistralai/mixtral-8x22b-instruct",
+    "model_name": "Mixtral 8x22B",
     "provider": "nvidia",
     "system_prompt": ""
   }
