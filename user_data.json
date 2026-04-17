@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "qwen/qwen2.5-coder-32b-instruct",
-    "model_name": "Qwen2.5 Coder 32B",
+    "model_id": "ibm/granite-3_3-8b-instruct",
+    "model_name": "IBM Granite 3.3",
     "provider": "nvidia",
     "system_prompt": ""
   }
