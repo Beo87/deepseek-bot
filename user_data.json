@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "nvidia/llama-3.3-nemotron-super-49b-v1",
-    "model_name": "Nemotron Super 49B",
+    "model_id": "google/gemma-4-31b-it",
+    "model_name": "Gemma 4 31B",
     "provider": "nvidia",
     "system_prompt": ""
   }
