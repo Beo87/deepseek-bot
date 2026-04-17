@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "mistralai/mixtral-8x22b-instruct",
-    "model_name": "Mixtral 8x22B",
+    "model_id": "meta/llama-3.1-405b-instruct",
+    "model_name": "Llama 3.1 405B",
     "provider": "nvidia",
     "system_prompt": ""
   }
