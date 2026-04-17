@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "zai-org/GLM-5.1",
-    "model_name": "GLM5.1",
+    "model_id": "microsoft/phi-4-mini-instruct",
+    "model_name": "Phi-4 Mini Instruct",
     "provider": "nvidia",
     "system_prompt": ""
   }
