@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "qwen/qwen3-coder-480b-a35b-instruct",
-    "model_name": "Qwen3 Coder 480B",
+    "model_id": "google/gemma-2-27b-it",
+    "model_name": "Gemma 2 27B",
     "provider": "nvidia",
     "system_prompt": ""
   }
