@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
-    "model_name": "Nemotron Ultra 253B",
+    "model_id": "zai-org/GLM-5.1",
+    "model_name": "GLM5.1",
     "provider": "nvidia",
     "system_prompt": ""
   }
