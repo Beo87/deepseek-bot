@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "moonshotai/kimi-k2-thinking",
-    "model_name": "Kimi K2 Thinking",
+    "model_id": "nvidia/llama-3.3-nemotron-super-49b-v1",
+    "model_name": "Nemotron Super 49B",
     "provider": "nvidia",
     "system_prompt": ""
   }
