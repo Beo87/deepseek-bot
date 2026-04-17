@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "ibm/granite-3_3-8b-instruct",
-    "model_name": "IBM Granite 3.3",
+    "model_id": "moonshotai/kimi-k2-thinking",
+    "model_name": "Kimi K2 Thinking",
     "provider": "nvidia",
     "system_prompt": ""
   }
