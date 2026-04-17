@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "qwen/qwen3-coder-480b-a35b-instruct",
-    "model_name": "Qwen3 Coder 480B",
+    "model_id": "meta/llama-4-maverick-17b-128e-instruct",
+    "model_name": "Llama 4 Maverick",
     "provider": "nvidia",
     "system_prompt": ""
   }
