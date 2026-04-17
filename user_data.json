@@ -1,7 +1,7 @@
 {
   "1717145408": {
-    "model_id": "qwen/qwen2.5-coder-32b-instruct",
-    "model_name": "Qwen2.5 Coder 32B",
+    "model_id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",
+    "model_name": "Nemotron Ultra 253B",
     "provider": "nvidia",
     "system_prompt": ""
   }
