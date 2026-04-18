@@ -1,73 +1,83 @@
 import os
 import json
+import re
 import requests
 import base64
-from html.parser import HTMLParser
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 
 # ===== ENV VARIABLES =====
-TELEGRAM_TOKEN  = os.environ.get("TELEGRAM_TOKEN")
-NVIDIA_API_KEY  = os.environ.get("NVIDIA_API_KEY")
-GITHUB_TOKEN    = os.environ.get("GITHUB_TOKEN")
-GITHUB_REPO     = os.environ.get("GITHUB_REPO")
-GEMINI_API_KEY  = os.environ.get("GEMINI_API_KEY")
-HF_API_KEY      = os.environ.get("HF_API_KEY")
+TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
+GITHUB_TOKEN   = os.environ.get("GIHUB_TOKEN")
+GITHUB_REPO    = os.environ.get("GIHUB_REPO")
+HF_API_KEY     = os.environ.get("HF_API_KEY")      # Hugging Face token
+TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")  # Tavily search
 
 # ===== FILES TREN GITHUB =====
 MEMORY_FILE    = "memory.json"
 USER_DATA_FILE = "user_data.json"
 
+# ===== SKILLS SYSTEM PROMPT =====
+SKILLS_SYSTEM = """Ban co the su dung cac skill sau bang cach tra ve JSON o DAU TIEN cua response:
+
+[SKILL:search] {"skill":"search","query":"tu khoa tim kiem"}
+[SKILL:imagine] {"skill":"imagine","prompt":"mo ta anh bang tieng Anh, chi tiet"}
+
+Quy tac su dung skill:
+- Nguoi dung hoi thong tin moi, thoi su, su kien gan day → dung search
+- Nguoi dung muon ve/tao/sinh/xem anh → dung imagine
+
+Neu khong can skill, tra loi binh thuong khong can JSON."""
+
 # ===== DANH SACH MODEL NVIDIA NIM =====
 models = [
     # Meta Llama
-    {"name": "Llama 4 Maverick",     "id": "meta/llama-4-maverick-17b-128e-instruct",    "provider": "nvidia"},
-    {"name": "Llama 4 Scout",        "id": "meta/llama-4-scout-17b-16e-instruct",         "provider": "nvidia"},
-    {"name": "Llama 3.3 70B",        "id": "meta/llama-3.3-70b-instruct",                 "provider": "nvidia"},
-    {"name": "Llama 3.1 405B",       "id": "meta/llama-3.1-405b-instruct",                "provider": "nvidia"},
-    {"name": "Llama 3.1 70B",        "id": "meta/llama-3.1-70b-instruct",                 "provider": "nvidia"},
-    {"name": "Llama 3.1 8B",         "id": "meta/llama-3.1-8b-instruct",                  "provider": "nvidia"},
+    {"name": "Llama 4 Maverick",     "id": "meta/llama-4-maverick-17b-128e-instruct"},
+    {"name": "Llama 4 Scout",        "id": "meta/llama-4-scout-17b-16e-instruct"},
+    {"name": "Llama 3.3 70B",        "id": "meta/llama-3.3-70b-instruct"},
+    {"name": "Llama 3.1 405B",       "id": "meta/llama-3.1-405b-instruct"},
+    {"name": "Llama 3.1 70B",        "id": "meta/llama-3.1-70b-instruct"},
+    {"name": "Llama 3.1 8B",         "id": "meta/llama-3.1-8b-instruct"},
     # DeepSeek
-    {"name": "DeepSeek R1",          "id": "deepseek-ai/deepseek-r1",                     "provider": "nvidia"},
-    {"name": "DeepSeek V3.2",        "id": "deepseek-ai/deepseek-v3.2",                   "provider": "nvidia"},
-    {"name": "DeepSeek V3.1",        "id": "deepseek-ai/deepseek-v3.1",                   "provider": "nvidia"},
-    {"name": "DeepSeek R1 Qwen 32B", "id": "deepseek-ai/deepseek-r1-distill-qwen-32b",   "provider": "nvidia"},
-    {"name": "DeepSeek R1 Llama 8B", "id": "deepseek-ai/deepseek-r1-distill-llama-8b",   "provider": "nvidia"},
+    {"name": "DeepSeek R1",          "id": "deepseek-ai/deepseek-r1"},
+    {"name": "DeepSeek V3.2",        "id": "deepseek-ai/deepseek-v3.2"},
+    {"name": "DeepSeek V3.1",        "id": "deepseek-ai/deepseek-v3.1"},
+    {"name": "DeepSeek R1 Qwen 32B", "id": "deepseek-ai/deepseek-r1-distill-qwen-32b"},
+    {"name": "DeepSeek R1 Llama 8B", "id": "deepseek-ai/deepseek-r1-distill-llama-8b"},
     # Google Gemma
-    {"name": "Gemma 4 31B",          "id": "google/gemma-4-31b-it",                       "provider": "nvidia"},
-    {"name": "Gemma 3 27B",          "id": "google/gemma-3-27b-it",                       "provider": "nvidia"},
-    {"name": "Gemma 2 27B",          "id": "google/gemma-2-27b-it",                       "provider": "nvidia"},
-    {"name": "Gemma 2 9B",           "id": "google/gemma-2-9b-it",                        "provider": "nvidia"},
+    {"name": "Gemma 4 31B",          "id": "google/gemma-4-31b-it"},
+    {"name": "Gemma 3 27B",          "id": "google/gemma-3-27b-it"},
+    {"name": "Gemma 2 27B",          "id": "google/gemma-2-27b-it"},
+    {"name": "Gemma 2 9B",           "id": "google/gemma-2-9b-it"},
     # NVIDIA Nemotron
-    {"name": "Nemotron Ultra 253B",  "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1",     "provider": "nvidia"},
-    {"name": "Nemotron Super 49B",   "id": "nvidia/llama-3.3-nemotron-super-49b-v1",      "provider": "nvidia"},
-    {"name": "Nemotron Nano 8B",     "id": "nvidia/llama-3.1-nemotron-nano-8b-v1",        "provider": "nvidia"},
-    {"name": "Nemotron Nano 4B",     "id": "nvidia/llama-3.1-nemotron-nano-4b-v1_1",      "provider": "nvidia"},
+    {"name": "Nemotron Ultra 253B",  "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1"},
+    {"name": "Nemotron Super 49B",   "id": "nvidia/llama-3.3-nemotron-super-49b-v1"},
+    {"name": "Nemotron Nano 8B",     "id": "nvidia/llama-3.1-nemotron-nano-8b-v1"},
+    {"name": "Nemotron Nano 4B",     "id": "nvidia/llama-3.1-nemotron-nano-4b-v1_1"},
     # Mistral
-    {"name": "Mixtral 8x22B",        "id": "mistralai/mixtral-8x22b-instruct",            "provider": "nvidia"},
-    {"name": "Mixtral 8x7B",         "id": "mistralai/mixtral-8x7b-instruct",             "provider": "nvidia"},
-    {"name": "Mistral Small 24B",    "id": "mistralai/mistral-small-24b-instruct",         "provider": "nvidia"},
-    {"name": "Mistral 7B",           "id": "mistralai/mistral-7b-instruct-v0.3",           "provider": "nvidia"},
-    {"name": "Mistral Nemotron",     "id": "mistralai/mistral-nemotron",                   "provider": "nvidia"},
-    {"name": "Codestral 22B",        "id": "mistralai/codestral-22b-instruct-v0.1",        "provider": "nvidia"},
+    {"name": "Mixtral 8x22B",        "id": "mistralai/mixtral-8x22b-instruct"},
+    {"name": "Mixtral 8x7B",         "id": "mistralai/mixtral-8x7b-instruct"},
+    {"name": "Mistral Small 24B",    "id": "mistralai/mistral-small-24b-instruct"},
+    {"name": "Mistral 7B",           "id": "mistralai/mistral-7b-instruct-v0.3"},
+    {"name": "Mistral Nemotron",     "id": "mistralai/mistral-nemotron"},
+    {"name": "Codestral 22B",        "id": "mistralai/codestral-22b-instruct-v0.1"},
     # Qwen
-    {"name": "Qwen3 Coder 480B",     "id": "qwen/qwen3-coder-480b-a35b-instruct",         "provider": "nvidia"},
-    {"name": "QwQ 32B",              "id": "qwen/qwq-32b",                                 "provider": "nvidia"},
-    {"name": "Qwen2.5 Coder 32B",    "id": "qwen/qwen2.5-coder-32b-instruct",             "provider": "nvidia"},
-    {"name": "Qwen2.5 7B",           "id": "qwen/qwen2.5-7b-instruct",                    "provider": "nvidia"},
+    {"name": "Qwen3 Coder 480B",     "id": "qwen/qwen3-coder-480b-a35b-instruct"},
+    {"name": "QwQ 32B",              "id": "qwen/qwq-32b"},
+    {"name": "Qwen2.5 Coder 32B",   "id": "qwen/qwen2.5-coder-32b-instruct"},
+    {"name": "Qwen2.5 7B",          "id": "qwen/qwen2.5-7b-instruct"},
     # Microsoft Phi
-    {"name": "Phi-4 Mini Instruct",  "id": "microsoft/phi-4-mini-instruct",                "provider": "nvidia"},
-    {"name": "Phi-4 Mini Reasoning", "id": "microsoft/phi-4-mini-flash-reasoning",         "provider": "nvidia"},
-    {"name": "Phi-3.5 Mini",         "id": "microsoft/phi-3.5-mini",                       "provider": "nvidia"},
+    {"name": "Phi-4 Mini Instruct",  "id": "microsoft/phi-4-mini-instruct"},
+    {"name": "Phi-4 Mini Reasoning", "id": "microsoft/phi-4-mini-flash-reasoning"},
+    {"name": "Phi-3.5 Mini",         "id": "microsoft/phi-3.5-mini"},
     # Moonshot Kimi
-    {"name": "Kimi K2",              "id": "moonshotai/kimi-k2-instruct",                  "provider": "nvidia"},
-    {"name": "Kimi K2 Thinking",     "id": "moonshotai/kimi-k2-thinking",                  "provider": "nvidia"},
-    # Khác
-    {"name": "MiniMax M2.5",         "id": "minimaxai/minimax-m2.5",                       "provider": "nvidia"},
-    {"name": "IBM Granite 3.3",      "id": "ibm/granite-3_3-8b-instruct",                  "provider": "nvidia"},
-    {"name": "GLM5.1",               "id": "zai-org/GLM-5.1",                              "provider": "nvidia"},
+    {"name": "Kimi K2",              "id": "moonshotai/kimi-k2-instruct"},
+    {"name": "Kimi K2 Thinking",     "id": "moonshotai/kimi-k2-thinking"},
+    # Khac
+    {"name": "MiniMax M2.5",         "id": "minimaxai/minimax-m2.5"},
+    {"name": "IBM Granite 3.3",      "id": "ibm/granite-3_3-8b-instruct"},
 ]
-
 
 user_data  = {}
 edit_state = {}
@@ -125,16 +135,15 @@ def create_file_github(path, content, message="Create via bot"):
     )
     return r.status_code == 201
 
-# ===== USER DATA PERSIST (luu/load model da chon) =====
+# ===== USER DATA PERSIST =====
 
 def save_user_data():
     content, sha = get_file(USER_DATA_FILE)
     data_to_save = {}
     for uid, d in user_data.items():
         data_to_save[str(uid)] = {
-            "model_id":    d.get("model_id", ""),
-            "model_name":  d.get("model_name", ""),
-            "provider":    d.get("provider", "nvidia"),
+            "model_id":      d.get("model_id", ""),
+            "model_name":    d.get("model_name", ""),
             "system_prompt": d.get("system_prompt", "")
         }
     content_str = json.dumps(data_to_save, ensure_ascii=False, indent=2)
@@ -151,16 +160,15 @@ def load_user_data():
         data = json.loads(content)
         for uid, d in data.items():
             user_data[int(uid)] = {
-                "model_id":    d.get("model_id", ""),
-                "model_name":  d.get("model_name", ""),
-                "provider":    d.get("provider", "nvidia"),
+                "model_id":      d.get("model_id", ""),
+                "model_name":    d.get("model_name", ""),
                 "system_prompt": d.get("system_prompt", ""),
-                "messages":    []
+                "messages":      []
             }
     except:
         pass
 
-# ===== MEMORY FUNCTIONS (nho thong tin dai han) =====
+# ===== MEMORY FUNCTIONS =====
 
 def load_memory(user_id):
     content, sha = get_file(MEMORY_FILE)
@@ -212,45 +220,36 @@ def goi_nvidia(model_id, messages, timeout=45):
     except Exception as e:
         return "Loi ket noi: " + str(e), "error"
 
-# ===== SKILL: WEB SEARCH (DuckDuckGo HTML) =====
+# ===== SKILL: WEB SEARCH (Tavily) =====
 
 def web_search(query, max_results=5):
     try:
-        class DDGParser(HTMLParser):
-            def __init__(self):
-                super().__init__()
-                self.results = []
-                self.in_result = False
-                self.current = ""
-            def handle_starttag(self, tag, attrs):
-                attrs = dict(attrs)
-                if tag == "a" and "result__a" in attrs.get("class", ""):
-                    self.in_result = True
-                    self.current = ""
-            def handle_endtag(self, tag):
-                if tag == "a" and self.in_result:
-                    self.in_result = False
-                    if self.current.strip():
-                        self.results.append(self.current.strip())
-            def handle_data(self, data):
-                if self.in_result:
-                    self.current += data
-
-        r = requests.get(
-            "https://html.duckduckgo.com/html/",
-            params={"q": query},
-            headers={"User-Agent": "Mozilla/5.0 (compatible; TelegramBot/1.0)"},
-            timeout=10
+        r = requests.post(
+            "https://api.tavily.com/search",
+            headers={"Content-Type": "application/json"},
+            json={
+                "api_key": TAVILY_API_KEY,
+                "query": query,
+                "max_results": max_results,
+                "search_depth": "basic"
+            },
+            timeout=15
         )
-        parser = DDGParser()
-        parser.feed(r.text)
-        if parser.results:
-            return "\n".join("- " + t for t in parser.results[:max_results])
-        return "Khong tim thay ket qua cho: " + query
+        data = r.json()
+        results = data.get("results", [])
+        if not results:
+            return "Khong tim thay ket qua cho: " + query
+        lines = []
+        for item in results:
+            title = item.get("title", "")
+            content = item.get("content", "")[:150]
+            url = item.get("url", "")
+            lines.append("• " + title + "\n  " + content + "...\n  " + url)
+        return "\n\n".join(lines)
     except Exception as e:
         return "Loi web search: " + str(e)
 
-# ===== SKILL: IMAGE GENERATION (Gemini 2.0 Flash) =====
+# ===== SKILL: IMAGE GENERATION (FLUX.1-schnell) =====
 
 def tao_anh(prompt):
     try:
@@ -268,10 +267,10 @@ def tao_anh(prompt):
         except:
             return "Loi tao anh (status " + str(r.status_code) + ")"
     except requests.exceptions.Timeout:
-        return "Timeout: Model dang load, thu lai sau 30 giay"
+        return "Timeout: Thu lai sau"
     except Exception as e:
         return "Loi tao anh: " + str(e)
-        
+
 # ===== SKILL: PHAN TICH ANH (Llama 4 Vision) =====
 
 def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"):
@@ -297,6 +296,39 @@ def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"
     except Exception as e:
         return "Loi phan tich anh: " + str(e)
 
+# ===== SKILL DISPATCHER =====
+
+async def xu_ly_skill(update: Update, response: str):
+    """Parse va thuc thi skill neu model yeu cau"""
+    match = re.search(r'\[SKILL:\w+\]\s*(\{.*?\})', response, re.DOTALL)
+    if not match:
+        return False
+    try:
+        skill_data = json.loads(match.group(1))
+        skill = skill_data.get("skill")
+
+        if skill == "search":
+            query = skill_data.get("query", "")
+            await update.message.reply_chat_action("typing")
+            result = web_search(query)
+            await update.message.reply_text("🔍 " + query + "\n\n" + result)
+            return True
+
+        if skill == "imagine":
+            prompt = skill_data.get("prompt", "")
+            await update.message.reply_text("🎨 Dang tao anh...")
+            await update.message.reply_chat_action("upload_photo")
+            result = tao_anh(prompt)
+            if isinstance(result, bytes):
+                await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
+            else:
+                await update.message.reply_text(result)
+            return True
+
+    except:
+        pass
+    return False
+
 # ===== BOT COMMANDS =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -307,19 +339,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/mymodel - Model dang dung\n"
         "/system [noi dung] - System prompt\n"
         "/reset - Xoa lich su chat\n\n"
-        "🧠 MEMORY (nho dai han):\n"
+        "🧠 MEMORY:\n"
         "/remember key=value - Luu thong tin\n"
         "/forget key - Xoa thong tin\n\n"
-        "🔍 SKILLS:\n"
-        "/search [tu khoa] - Tim kiem web\n"
-        "/imagine [mo ta] - Tao anh AI\n"
+        "🔍 SKILLS (tu dong hoac lenh tat):\n"
+        "search [tu khoa] - Tim kiem web\n"
+        "imagine [mo ta] - Tao anh AI\n"
         "📷 Gui anh - Phan tich anh\n\n"
         "📁 GITHUB:\n"
         "/files - Danh sach file\n"
         "/read ten_file - Doc file\n"
         "/edit ten_file - Sua file\n"
         "/push ten_file - Tao file moi\n"
-        "/cancel - Huy thao tac"
+        "/cancel - Huy"
     )
 
 async def chon_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -344,10 +376,9 @@ async def xu_ly_chon_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
     model = models[int(query.data.split("_")[1])]
     existing = user_data.get(user_id, {})
     user_data[user_id] = {
-        "model_id":    model["id"],
-        "model_name":  model["name"],
-        "provider":    "nvidia",
-        "messages":    existing.get("messages", []),  # giữ nguyên lich su
+        "model_id":      model["id"],
+        "model_name":    model["name"],
+        "messages":      existing.get("messages", []),
         "system_prompt": existing.get("system_prompt", "")
     }
     save_user_data()
@@ -390,7 +421,7 @@ async def set_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     system_prompt = " ".join(context.args)
     if user_id not in user_data:
-        user_data[user_id] = {"messages": [], "system_prompt": "", "model_id": "", "model_name": "", "provider": "nvidia"}
+        user_data[user_id] = {"messages": [], "system_prompt": "", "model_id": "", "model_name": ""}
     user_data[user_id]["system_prompt"] = system_prompt
     user_data[user_id]["messages"] = []
     save_user_data()
@@ -411,7 +442,7 @@ async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if not memory:
             await update.message.reply_text("Memory trong.\nDung: /remember ten=Nam nghe=lapTrinh")
             return
-        text = "🧠 Memory cua ban:\n\n"
+        text = "🧠 Memory:\n\n"
         for k, v in memory.items():
             text += "- " + k + ": " + str(v) + "\n"
         await update.message.reply_text(text)
@@ -522,7 +553,7 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         del edit_state[user_id]
     await update.message.reply_text("Da huy!")
 
-# ===== XU LY ANH =====
+# ===== XU LY ANH GUI LEN =====
 
 async def xu_ly_anh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_chat_action("typing")
@@ -619,17 +650,16 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d["messages"].append({"role": "user", "content": tin_nhan})
     await update.message.reply_chat_action("typing")
 
-    # Ghep system prompt + memory
+    # Ghep system prompt + memory + skills
     messages_to_send = []
     memory, _ = load_memory(user_id)
     memory_text = memory_to_system(memory)
-    system_parts = []
+    system_parts = [SKILLS_SYSTEM]
     if d.get("system_prompt"):
         system_parts.append(d["system_prompt"])
     if memory_text:
         system_parts.append(memory_text)
-    if system_parts:
-        messages_to_send.append({"role": "system", "content": "\n\n".join(system_parts)})
+    messages_to_send.append({"role": "system", "content": "\n\n".join(system_parts)})
     messages_to_send.extend(d["messages"])
 
     # Goi AI
@@ -645,6 +675,12 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     d["messages"].append({"role": "assistant", "content": tra_loi})
+
+    # Kiem tra skill
+    skill_done = await xu_ly_skill(update, tra_loi)
+    if skill_done:
+        return
+
     if len(tra_loi) > 4096:
         tra_loi = tra_loi[:4090] + "..."
     await update.message.reply_text(d["model_name"] + ":\n\n" + tra_loi)
