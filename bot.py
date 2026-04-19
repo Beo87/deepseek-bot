@@ -19,16 +19,20 @@ MEMORY_FILE    = "memory.json"
 USER_DATA_FILE = "user_data.json"
 
 # ===== SKILLS SYSTEM PROMPT =====
-SKILLS_SYSTEM = """Ban co the su dung cac skill sau bang cach tra ve JSON o DAU TIEN cua response:
+SKILLS_SYSTEM = """Ban co the su dung cac skill sau:
 
-[SKILL:search] {"skill":"search","query":"tu khoa tim kiem"}
-[SKILL:imagine] {"skill":"imagine","prompt":"mo ta anh bang tieng Anh, chi tiet"}
+De tim kiem web, tra ve EXACTLY dong nay (khong them gi khac):
+[SKILL:search] {"skill":"search","query":"tu khoa"}
 
-Quy tac su dung skill:
-- Nguoi dung hoi thong tin moi, thoi su, su kien gan day → dung search
-- Nguoi dung muon ve/tao/sinh/xem anh → dung imagine
+De tao anh, tra ve EXACTLY dong nay:
+[SKILL:imagine] {"skill":"imagine","prompt":"mo ta bang tieng Anh"}
 
-Neu khong can skill, tra loi binh thuong khong can JSON."""
+Quy tac:
+- Nguoi dung hoi tin tuc/su kien moi → tra ve [SKILL:search]
+- Nguoi dung muon tao/ve anh → tra ve [SKILL:imagine]
+- Neu khong can skill → tra loi binh thuong, KHONG dung JSON
+
+QUAN TRONG: Neu dung skill, chi tra ve dung 1 dong [SKILL:...] do, khong them text khac."""
 
 # ===== DANH SACH MODEL NVIDIA NIM =====
 models = [
@@ -299,8 +303,8 @@ def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"
 # ===== SKILL DISPATCHER =====
 
 async def xu_ly_skill(update: Update, response: str):
-    """Parse va thuc thi skill neu model yeu cau"""
-    match = re.search(r'\[SKILL:\w+\]\s*(\{.*?\})', response, re.DOTALL)
+    # Bắt cả 2 dạng: có hoặc không có [SKILL:...] prefix
+    match = re.search(r'(?:\[SKILL:\w+\]\s*)?(\{"skill"\s*:\s*"(search|imagine)".*?\})', response, re.DOTALL)
     if not match:
         return False
     try:
@@ -324,7 +328,6 @@ async def xu_ly_skill(update: Update, response: str):
             else:
                 await update.message.reply_text(result)
             return True
-
     except:
         pass
     return False
