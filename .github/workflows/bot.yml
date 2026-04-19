@@ -26,7 +26,7 @@ jobs:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           GITHUB_TOKEN: ${{ secrets.GIHUB_TOKEN }}
-          GITHUB_REPO: Beo87/deepseek-bot
+          GITHUB_REPO: ${{ secrets.GIHUB_REPO }}
           HF_API_KEY: ${{ secrets.HF_API_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
         run: python bot.py
