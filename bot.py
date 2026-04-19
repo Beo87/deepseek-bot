@@ -102,7 +102,7 @@ def github_headers():
 
 def list_files(path=""):
     r = requests.get(
-        "https://api.github.com/repos/" + GIHUB_REPO + "/contents/" + path,
+        "https://api.github.com/repos/" GITHUB_REPO + "/contents/" + path,
         headers=github_headers()
     )
     return r.json() if r.status_code == 200 else None
