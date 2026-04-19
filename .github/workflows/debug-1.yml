@@ -21,8 +21,8 @@ jobs:
         env:
           TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          GITHUB_REPO: ${{ secrets.GITHUB_REPO }}
+          GITHUB_TOKEN: ${{ secrets.GIHUB_TOKEN }}
+          GITHUB_REPO: ${{ secrets.GIHUB_REPO }}
           HF_API_KEY: ${{ secrets.HF_API_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
         run: |
@@ -32,8 +32,8 @@ jobs:
           secrets = {
               "TELEGRAM_TOKEN":  os.environ.get("TELEGRAM_TOKEN"),
               "NVIDIA_API_KEY":  os.environ.get("NVIDIA_API_KEY"),
-              "GITHUB_TOKEN":    os.environ.get("GITHUB_TOKEN"),
-              "GITHUB_REPO":     os.environ.get("GITHUB_REPO"),
+              "GITHUB_TOKEN":    os.environ.get("GIHUB_TOKEN"),
+              "GITHUB_REPO":     os.environ.get("GIHUB_REPO"),
               "HF_API_KEY":      os.environ.get("HF_API_KEY"),
               "TAVILY_API_KEY":  os.environ.get("TAVILY_API_KEY"),
           }
