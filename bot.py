@@ -10,7 +10,7 @@ from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, Cal
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
 GITHUB_TOKEN   = os.environ.get("GIHUB_TOKEN")
-GITHUB_REPO    = os.environ.get("Beo87/deepseek-bot")
+GITHUB_REPO    = os.environ.get("GITHUB_REPO")
 HF_API_KEY     = os.environ.get("HF_API_KEY")      # Hugging Face token
 TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")  # Tavily search
 
