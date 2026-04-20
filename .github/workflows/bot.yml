@@ -12,7 +12,7 @@ concurrency:
 jobs:
   bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 720
     steps:
       - uses: actions/checkout@v4
       - name: Setup Python
