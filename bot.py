@@ -79,6 +79,7 @@ models = [
     {"name": "Kimi K2",              "id": "moonshotai/kimi-k2-instruct"},
     {"name": "Kimi K2 Thinking",     "id": "moonshotai/kimi-k2-thinking"},
     # Khac
+    {"name": "GlM",                  "id": "z-ai/glm-5.1"},
     {"name": "MiniMax M2.5",         "id": "minimaxai/minimax-m2.5"},
     {"name": "IBM Granite 3.3",      "id": "ibm/granite-3_3-8b-instruct"},
 ]
