@@ -346,16 +346,23 @@ async def xu_ly_skill(update: Update, response: str):
             return True
 
         if skill == "imagine":
-           prompt = skill_data.get("prompt", "")
-           style = skill_data.get("style")
+    prompt = skill_data.get("prompt", "")
+    style = skill_data.get("style")
 
-           await update.message.reply_text("🎨 Dang tao anh...")
-           await update.message.reply_chat_action("upload_photo")
+    await update.message.reply_text("🎨 Dang tao anh...")
+    await update.message.reply_chat_action("upload_photo")
 
-           result = tao_anh(prompt, style)
+    result = tao_anh(prompt, style)
 
-    if isinstance(result, (bytes, str)):
+    # ✅ Nếu là bytes (ảnh thật)
+    if isinstance(result, bytes):
         await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
+
+    # ✅ Nếu là URL ảnh
+    elif isinstance(result, str) and result.startswith("http"):
+        await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
+
+    # ❌ Nếu là lỗi
     else:
         await update.message.reply_text(result)
 
