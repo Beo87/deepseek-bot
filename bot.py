@@ -367,7 +367,9 @@ async def xu_ly_skill(update: Update, response: str):
                await update.message.reply_text(result)
 
            return True
-            
+    except:
+        return False
+
 # ===== BOT COMMANDS =====
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -535,7 +537,8 @@ async def imagine(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
     else:
         await update.message.reply_text(result)
- async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         return await update.message.reply_text("Dung: /anime mo ta")
 
@@ -651,19 +654,19 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     tin_lower = tin_nhan.strip().lower()
 
     if tin_lower.startswith("anime "):
-    prompt = tin_nhan[6:].strip()
-    await update.message.reply_photo(photo=tao_anh(prompt, "anime"))
-    return
+        prompt = tin_nhan[6:].strip()
+        await update.message.reply_photo(photo=tao_anh(prompt, "anime"))
+        return
 
     if tin_lower.startswith("real "):
-    prompt = tin_nhan[5:].strip()
-    await update.message.reply_photo(photo=tao_anh(prompt, "real"))
-    return
+        prompt = tin_nhan[5:].strip()
+        await update.message.reply_photo(photo=tao_anh(prompt, "real"))
+        return
 
     if tin_lower.startswith("cinematic "):
-    prompt = tin_nhan[10:].strip()
-    await update.message.reply_photo(photo=tao_anh(prompt, "cinematic"))
-    return
+        prompt = tin_nhan[10:].strip()
+        await update.message.reply_photo(photo=tao_anh(prompt, "cinematic"))
+        return
     
     if tin_lower.startswith("imagine "):
         prompt = tin_nhan[8:].strip()
