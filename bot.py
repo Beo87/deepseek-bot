@@ -356,7 +356,7 @@ async def xu_ly_skill(update: Update, response: str):
 
     # ✅ Nếu là bytes (ảnh thật)
             if isinstance(result, bytes):
-                 await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
+               await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
 
     # ✅ Nếu là URL ảnh
             elif isinstance(result, str) and result.startswith("http"):
