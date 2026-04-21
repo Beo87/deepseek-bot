@@ -257,25 +257,50 @@ def web_search(query, max_results=5):
 
 # ===== SKILL: IMAGE GENERATION (FLUX.1-schnell) =====
 
-def tao_anh(prompt):
+import urllib.parse
+import random
+
+def tao_anh(prompt, style=None):
+    base = ", ultra detailed, 8k"
+
+    if style == "anime":
+        prompt += ", anime style, big eyes, vibrant colors" + base
+    elif style == "real":
+        prompt += ", ultra realistic, DSLR, natural skin, 85mm lens" + base
+    elif style == "cinematic":
+        prompt += ", cinematic lighting, dramatic shadows, movie still" + base
+    else:
+        prompt += base
+
+    # ⚡ Pollinations (fast)
+    try:
+        prompt_encoded = urllib.parse.quote(prompt)
+        seed = random.randint(1, 999999)
+        return f"https://image.pollinations.ai/prompt/{prompt_encoded}?seed={seed}"
+    except:
+        pass
+
+    # 🔁 HuggingFace fallback
     try:
         r = requests.post(
             "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
-            headers={"Authorization": "Bearer " + HF_API_KEY},
-            json={"inputs": prompt},
-            timeout=60
+            headers={
+                "Authorization": "Bearer " + HF_API_KEY,
+                "Accept": "image/png"
+            },
+            json={
+                "inputs": prompt,
+                "options": {"wait_for_model": True}
+            },
+            timeout=120
         )
-        if r.status_code == 200 and r.headers.get("content-type", "").startswith("image"):
+
+        if r.status_code == 200 and "image" in r.headers.get("content-type", ""):
             return r.content
-        try:
-            err = r.json()
-            return "Loi tao anh: " + str(err.get("error", r.text))
-        except:
-            return "Loi tao anh (status " + str(r.status_code) + ")"
-    except requests.exceptions.Timeout:
-        return "Timeout: Thu lai sau"
-    except Exception as e:
-        return "Loi tao anh: " + str(e)
+    except:
+        pass
+
+    return "❌ Tat ca API deu loi"
 
 # ===== SKILL: PHAN TICH ANH (Llama 4 Vision) =====
 
@@ -321,18 +346,20 @@ async def xu_ly_skill(update: Update, response: str):
             return True
 
         if skill == "imagine":
-            prompt = skill_data.get("prompt", "")
-            await update.message.reply_text("🎨 Dang tao anh...")
-            await update.message.reply_chat_action("upload_photo")
-            result = tao_anh(prompt)
-            if isinstance(result, bytes):
-                await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
-            else:
-                await update.message.reply_text(result)
-            return True
-    except:
-        pass
-    return False
+    prompt = skill_data.get("prompt", "")
+    style = skill_data.get("style")  # 👈 thêm
+
+    await update.message.reply_text("🎨 Dang tao anh...")
+    await update.message.reply_chat_action("upload_photo")
+
+    result = tao_anh(prompt, style)
+
+    if isinstance(result, (bytes, str)):
+        await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
+    else:
+        await update.message.reply_text(result)
+
+    return True
 
 # ===== BOT COMMANDS =====
 
@@ -501,6 +528,31 @@ async def imagine(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
     else:
         await update.message.reply_text(result)
+ async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return await update.message.reply_text("Dung: /anime mo ta")
+
+    prompt = " ".join(context.args)
+    await update.message.reply_text("🎨 Anime...")
+    await update.message.reply_photo(photo=tao_anh(prompt, "anime"))
+
+
+async def real(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return await update.message.reply_text("Dung: /real mo ta")
+
+    prompt = " ".join(context.args)
+    await update.message.reply_text("📸 Real...")
+    await update.message.reply_photo(photo=tao_anh(prompt, "real"))
+
+
+async def cinematic(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not context.args:
+        return await update.message.reply_text("Dung: /cinematic mo ta")
+
+    prompt = " ".join(context.args)
+    await update.message.reply_text("🎬 Cinematic...")
+    await update.message.reply_photo(photo=tao_anh(prompt, "cinematic"))
 
 # ===== GITHUB COMMANDS =====
 
@@ -591,6 +643,21 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Lenh tat (khong can /)
     tin_lower = tin_nhan.strip().lower()
 
+    if tin_lower.startswith("anime "):
+    prompt = tin_nhan[6:].strip()
+    await update.message.reply_photo(photo=tao_anh(prompt, "anime"))
+    return
+
+    if tin_lower.startswith("real "):
+    prompt = tin_nhan[5:].strip()
+    await update.message.reply_photo(photo=tao_anh(prompt, "real"))
+    return
+
+    if tin_lower.startswith("cinematic "):
+    prompt = tin_nhan[10:].strip()
+    await update.message.reply_photo(photo=tao_anh(prompt, "cinematic"))
+    return
+    
     if tin_lower.startswith("imagine "):
         prompt = tin_nhan[8:].strip()
         await update.message.reply_text("🎨 Dang tao anh...")
@@ -705,6 +772,9 @@ app.add_handler(CommandHandler("remember", remember))
 app.add_handler(CommandHandler("forget", forget))
 app.add_handler(CommandHandler("search", search))
 app.add_handler(CommandHandler("imagine", imagine))
+app.add_handler(CommandHandler("anime", anime))
+app.add_handler(CommandHandler("real", real))
+app.add_handler(CommandHandler("cinematic", cinematic))
 app.add_handler(CommandHandler("files", files))
 app.add_handler(CommandHandler("read", read_file))
 app.add_handler(CommandHandler("edit", edit_file))
