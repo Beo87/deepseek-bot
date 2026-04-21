@@ -352,7 +352,7 @@ async def xu_ly_skill(update: Update, response: str):
            await update.message.reply_text("🎨 Dang tao anh...")
            await update.message.reply_chat_action("upload_photo")
 
-            result = tao_anh(prompt, style)
+           result = tao_anh(prompt, style)
 
     # ✅ Nếu là bytes (ảnh thật)
             if isinstance(result, bytes):
