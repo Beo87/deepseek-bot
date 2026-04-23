@@ -4,19 +4,19 @@ import asyncio
 ROLE_CONFIG = {
     "economic": {
         "system": "Bạn là chuyên gia kinh tế.",
-        "model": "meta/llama-3.1-70b-instruct"
+        "model": "meta/llama-4-maverick-17b-128e-instruct"
     },
     "technical": {
         "system": "Bạn là kỹ sư phần mềm.",
-        "model": "qwen/qwen2.5-coder-32b-instruct"
+        "model": "qwen/qwen3-coder-480b-a35b-instruct"
     },
     "legal": {
         "system": "Bạn là chuyên gia pháp lý.",
-        "model": "mistralai/mistral-small-24b-instruct"
+        "model": "z-ai/glm-5.1"
     },
     "marketing": {
         "system": "Bạn là chuyên gia marketing.",
-        "model": "google/gemma-3-27b-it"
+        "model": "qwen/qwen2.5-coder-32b-instruct"
     }
 }
 
