@@ -5,6 +5,7 @@ import requests
 import base64
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
+from meeting_mode import is_meeting_prompt, run_roles, debate, aggregate
 
 # ===== ENV VARIABLES =====
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -87,6 +88,7 @@ models = [
 
 user_data  = {}
 edit_state = {}
+meeting_sessions = {}
 
 # ===== HELPERS =====
 
@@ -637,6 +639,17 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     tin_nhan = update.message.text
 
+   # ===== MEETING MODE ON =====
+   if is_meeting_prompt(tin_nhan):
+    meeting_sessions[user_id] = True
+    await update.message.reply_text(
+        "🧠 Chế độ họp kích hoạt!\n👉 Nhập vấn đề cần thảo luận"
+    )
+    return
+
+   
+
+
     # Che do edit/create file
     if user_id in edit_state:
         state = edit_state[user_id]
@@ -722,6 +735,35 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("Khong tim thay: " + key)
         return
+# ===== MEETING FLOW =====
+if meeting_sessions.get(user_id):
+    await update.message.reply_text("🚀 PRO MEETING đang chạy...")
+
+    # search hint
+    search_hint = maybe_search(tin_nhan)
+    if search_hint:
+        await update.message.reply_text("🌐 Gợi ý: nên search thêm dữ liệu")
+
+    # round 1
+    r1 = await run_roles(tin_nhan, goi_nvidia)
+    for k, v in r1.items():
+        await update.message.reply_text(f"📊 {k}:\n{v[:1000]}")
+
+    # debate
+    r2 = await debate(tin_nhan, r1, goi_nvidia)
+    for k, v in r2.items():
+        await update.message.reply_text(f"⚔️ {k}:\n{v[:1000]}")
+
+    # voting
+    votes = await voting(tin_nhan, r1, goi_nvidia)
+    await update.message.reply_text(f"🗳 Votes: {votes}")
+
+    # final
+    final = aggregate(tin_nhan, r1, r2, votes, goi_nvidia)
+    await update.message.reply_text("🏆 FINAL:\n\n" + final)
+
+     return
+
 
     # Chat AI
     if user_id not in user_data or not user_data[user_id].get("model_id"):
