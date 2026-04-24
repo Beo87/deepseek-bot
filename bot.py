@@ -187,7 +187,6 @@ def load_memory(user_id):
         return data.get(str(user_id), {}), sha
     except:
         return {}, None
-
 def save_memory(user_id, memory_dict):
     content, sha = get_file(MEMORY_FILE)
     try:
@@ -732,27 +731,31 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             else:
                 await update.message.reply_text("Khong tim thay: " + key)
         return
-# ===== MEETING FLOW =====
+
+    # ===== MEETING FLOW =====
     if meeting_sessions.get(user_id):
-        await update.message.reply_text("🚀 PRO MEETING đang chạy...")
+        await update.message.reply_text("🚀 PRO MEETING đang chạy... (Kết quả sẽ được gửi riêng)")
 
         # round 1
         r1 = await run_roles(tin_nhan, goi_nvidia)
         for k, v in r1.items():
-            await update.message.reply_text(f"📊 {k}:\n{v[:1000]}")
+            await context.bot.send_message(chat_id=user_id, text=f"📊 {k}:\n{v[:1000]}")
 
         # debate
         r2 = await debate(tin_nhan, r1, goi_nvidia)
         for k, v in r2.items():
-            await update.message.reply_text(f"⚔️ {k}:\n{v[:1000]}")
+            await context.bot.send_message(chat_id=user_id, text=f"⚔️ {k}:\n{v[:1000]}")
 
         # voting
         votes = await voting(tin_nhan, r1, goi_nvidia)
-        await update.message.reply_text(f"🗳️ Votes: {votes}")
+        await context.bot.send_message(chat_id=user_id, text=f"🗳️ Votes: {votes}")
 
         # final
         final = aggregate(tin_nhan, r1, r2, votes, goi_nvidia)
-        await update.message.reply_text("🏆 FINAL:\n\n" + final)
+        await context.bot.send_message(chat_id=user_id, text="🏆 FINAL:\n\n" + final)
+
+        del meeting_sessions[user_id]
+        await update.message.reply_text("✅ PRO MEETING đã hoàn thành! Kết quả đã được gửi riêng.")
         return
 
     # Chat AI
