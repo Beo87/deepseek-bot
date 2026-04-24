@@ -5,7 +5,7 @@ import requests
 import base64
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from meeting_mode import is_meeting_prompt, run_roles, debate, aggregate, voting
+from meeting_mode import is_meeting_prompt, is_stop_meeting_prompt, run_roles, debate, aggregate, voting
 
 # ===== ENV VARIABLES =====
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
@@ -210,7 +210,7 @@ def memory_to_system(memory_dict):
 
 # ===== AI CALL =====
 
-def goi_nvidia(model_id, messages, timeout=45):
+async def goi_nvidia(model_id, messages, timeout=45):
     try:
         r = requests.post(
             "https://integrate.api.nvidia.com/v1/chat/completions",
@@ -331,12 +331,13 @@ def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"
 # ===== SKILL DISPATCHER =====
 
 async def xu_ly_skill(update: Update, response: str):
-    # Bắt cả 2 dạng: có hoặc không có [SKILL:...] prefix
     match = re.search(r'(?:\[SKILL:\w+\]\s*)?(\{"skill"\s*:\s*"(search|imagine)".*?\})', response, re.DOTALL)
     if not match:
-        return False
+        return False, None
+
     try:
-        skill_data = json.loads(match.group(1))
+        skill_json_string = match.group(1)
+        skill_data = json.loads(skill_json_string)
         skill = skill_data.get("skill")
 
         if skill == "search":
@@ -344,27 +345,31 @@ async def xu_ly_skill(update: Update, response: str):
             await update.message.reply_chat_action("typing")
             result = web_search(query)
             await update.message.reply_text("🔍 " + query + "\n\n" + result)
-            return True
+            return True, skill_json_string
 
         if skill == "imagine":
-           prompt = skill_data.get("prompt", "")
-           style = skill_data.get("style")
+            prompt = skill_data.get("prompt", "")
+            style = skill_data.get("style")
 
-           await update.message.reply_text("🎨 Dang tao anh...")
-           await update.message.reply_chat_action("upload_photo")
+            await update.message.reply_text("🎨 Dang tao anh...")
+            await update.message.reply_chat_action("upload_photo")
+            result = tao_anh(prompt, style)
 
-           result = tao_anh(prompt, style)
+            if isinstance(result, bytes):
+                await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
+            elif isinstance(result, str) and result.startswith("http"):
+                await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
+            else:
+                await update.message.reply_text(result)
+            return True, skill_json_string
 
-           if isinstance(result, bytes):
-               await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
-           elif isinstance(result, str) and result.startswith("http"):
-               await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
-           else:
-               await update.message.reply_text(result)
+    except json.JSONDecodeError:
+        # The model tried to use a skill but failed. We will hide the error.
+        return False, match.group(0) # Return the whole matched string to be cleaned
+    except Exception:
+        return False, None
 
-           return True
-    except:
-        return False
+    return False, None
 
 # ===== BOT COMMANDS =====
 
@@ -633,11 +638,38 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     tin_nhan = update.message.text
 
-    # ===== MEETING MODE ON =====
+    # ===== MEETING FLOW =====
+    if user_id in meeting_sessions:
+        if is_stop_meeting_prompt(tin_nhan):
+            del meeting_sessions[user_id]
+            await update.message.reply_text("🔴 Đã kết thúc cuộc họp.")
+            return
+
+        await update.message.reply_text("🚀 PRO MEETING đang chạy... (Kết quả sẽ được gửi riêng)")
+
+        r1 = await run_roles(tin_nhan, goi_nvidia)
+        for k, v in r1.items():
+            await context.bot.send_message(chat_id=user_id, text=f"📊 {k}:\n{v[:4000]}")
+
+        r2 = await debate(tin_nhan, r1, goi_nvidia)
+        for k, v in r2.items():
+            await context.bot.send_message(chat_id=user_id, text=f"⚔️ {k}:\n{v[:4000]}")
+
+        votes = await voting(tin_nhan, r1, goi_nvidia)
+        await context.bot.send_message(chat_id=user_id, text=f"🗳️ Votes: {votes}")
+
+        final = await aggregate(tin_nhan, r1, r2, votes, goi_nvidia)
+        await context.bot.send_message(chat_id=user_id, text="🏆 FINAL:\n\n" + final)
+
+        del meeting_sessions[user_id]
+        await update.message.reply_text("✅ PRO MEETING đã hoàn thành! Kết quả đã được gửi riêng.")
+        return
+
+    # ===== START MEETING =====
     if is_meeting_prompt(tin_nhan):
         meeting_sessions[user_id] = True
         await update.message.reply_text(
-            "🧠 Chế độ họp kích hoạt!\n👉 Nhập vấn đề cần thảo luận"
+            "🧠 Chế độ họp kích hoạt!\n👉 Nhập vấn đề cần thảo luận, hoặc 'ngưng' để kết thúc."
         )
         return
 
@@ -727,32 +759,6 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Khong tim thay: " + key)
         return
 
-    # ===== MEETING FLOW =====
-    if meeting_sessions.get(user_id):
-        await update.message.reply_text("🚀 PRO MEETING đang chạy... (Kết quả sẽ được gửi riêng)")
-
-        # round 1
-        r1 = await run_roles(tin_nhan, goi_nvidia)
-        for k, v in r1.items():
-            await context.bot.send_message(chat_id=user_id, text=f"📊 {k}:\n{v[:1000]}")
-
-        # debate
-        r2 = await debate(tin_nhan, r1, goi_nvidia)
-        for k, v in r2.items():
-            await context.bot.send_message(chat_id=user_id, text=f"⚔️ {k}:\n{v[:1000]}")
-
-        # voting
-        votes = await voting(tin_nhan, r1, goi_nvidia)
-        await context.bot.send_message(chat_id=user_id, text=f"🗳️ Votes: {votes}")
-
-        # final
-        final = await aggregate(tin_nhan, r1, r2, votes, goi_nvidia)
-        await context.bot.send_message(chat_id=user_id, text="🏆 FINAL:\n\n" + final)
-
-        del meeting_sessions[user_id]
-        await update.message.reply_text("✅ PRO MEETING đã hoàn thành! Kết quả đã được gửi riêng.")
-        return
-
     # Chat AI
     if user_id not in user_data or not user_data[user_id].get("model_id"):
         await update.message.reply_text("Chua chon model! Dung /model truoc.")
@@ -762,7 +768,6 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     d["messages"].append({"role": "user", "content": tin_nhan})
     await update.message.reply_chat_action("typing")
 
-    # Ghep system prompt + memory + skills
     messages_to_send = []
     memory, _ = load_memory(user_id)
     memory_text = memory_to_system(memory)
@@ -774,7 +779,6 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     messages_to_send.append({"role": "system", "content": "\n\n".join(system_parts)})
     messages_to_send.extend(d["messages"])
 
-    # Goi AI
     tra_loi, err_type = goi_nvidia(d["model_id"], messages_to_send)
 
     if err_type == "timeout":
@@ -786,36 +790,26 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Loi: " + tra_loi)
         return
 
-    d["messages"].append({"role": "assistant", "content": tra_loi})
+    skill_done, skill_text = await xu_ly_skill(update, tra_loi)
 
-    # Kiem tra skill
-    skill_done = await xu_ly_skill(update, tra_loi)
+    cleaned_tra_loi = tra_loi
+    if skill_text:
+        cleaned_tra_loi = cleaned_tra_loi.replace(skill_text, "").strip()
+    
+    d["messages"].append({"role": "assistant", "content": cleaned_tra_loi if cleaned_tra_loi else tra_loi})
 
-    # Clean the text part of the response, removing any skill calls.
-    cleaned_tra_loi = re.sub(r'(?:\[SKILL:\w+\]\s*)?(\{"skill"\s*:\s*"(search|imagine)".*?\})', '', tra_loi, flags=re.DOTALL).strip()
-
-    # Update history with a clean response (without skill calls)
-    if d["messages"] and d["messages"][-1]["role"] == "assistant":
-        d["messages"][-1]["content"] = cleaned_tra_loi
-
-    # If a skill was successfully executed...
     if skill_done:
-        # ... and there was also text in the response, send that text.
         if cleaned_tra_loi:
             await update.message.reply_text(d["model_name"] + ":\n\n" + cleaned_tra_loi)
         return
 
-    # If no skill was executed (or it failed) and the cleaned response is empty...
-    if not cleaned_tra_loi:
-        # ...then send a generic error instead of an empty message or raw JSON.
-        await update.message.reply_text("🤖 Đã có lỗi khi thực hiện tác vụ. Vui lòng thử lại.")
-        return
+    if not cleaned_tra_loi.strip():
+         await update.message.reply_text("🤖 Đã có lỗi khi thực hiện tác vụ. Vui lòng thử lại.")
+         return
 
-    # Otherwise, this was a regular text response. Send the cleaned version.
     if len(cleaned_tra_loi) > 4096:
         cleaned_tra_loi = cleaned_tra_loi[:4090] + "..."
     await update.message.reply_text(d["model_name"] + ":\n\n" + cleaned_tra_loi)
-
 
 # ===== CHAY BOT =====
 print("Dang load user data tu GitHub...")

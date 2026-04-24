@@ -24,6 +24,10 @@ ROLE_CONFIG = {
 def is_meeting_prompt(text: str):
     return "họp" in text.lower() or "meeting" in text.lower()
 
+def is_stop_meeting_prompt(text: str):
+    lower_text = text.lower().strip()
+    return lower_text == "stop" or lower_text == "ngưng"
+
 # ===== AUTO SEARCH HOOK =====
 def maybe_search(topic):
     keywords = ["giá", "trend", "2025", "thị trường", "news"]
@@ -31,111 +35,98 @@ def maybe_search(topic):
         return f"[SEARCH NEEDED] {topic}"
     return None
 
-# ===== ROUND 1 =====
-async def run_roles(topic, goi_nvidia):
-    loop = asyncio.get_event_loop()
+async def run_roles(topic, nvidia_caller):
     tasks = []
-
-    for role, cfg in ROLE_CONFIG.items():
+    for role, config in ROLE_CONFIG.items():
         messages = [
-            {"role": "system", "content": cfg["system"]},
-            {"role": "user", "content": f"""
-Phân tích: {topic}
-
-Trả lời JSON:
-- summary
-- risks
-- solution
-- score (0-10)
-"""}
+            {"role": "system", "content": config["system"]},
+            {"role": "user", "content": f"Chủ đề: {topic}. Đưa ra ý kiến."}
         ]
-
-        tasks.append(
-            loop.run_in_executor(None, goi_nvidia, cfg["model"], messages)
-        )
-
+        tasks.append(nvidia_caller(config["model"], messages))
+    
     results = await asyncio.gather(*tasks)
+    
+    role_results = {}
+    for i, role in enumerate(ROLE_CONFIG.keys()):
+        role_results[role] = results[i][0] if results[i][1] is None else f"Error: {results[i][0]}"
+        
+    return role_results
 
-    return {k: v[0] for k, v in zip(ROLE_CONFIG.keys(), results)}
-
-# ===== DEBATE =====
-async def debate(topic, results, goi_nvidia):
-    loop = asyncio.get_event_loop()
-    combined = "\n\n".join([f"{k}: {v}" for k, v in results.items()])
-
-    tasks = []
-
-    for role, cfg in ROLE_CONFIG.items():
-        messages = [
-            {"role": "system", "content": cfg["system"]},
-            {"role": "user", "content": f"""
-Các ý kiến:
-{combined}
-
-Hãy phản biện + cải thiện solution.
-"""}
+async def debate(topic, r1_results, nvidia_caller):
+    debate_messages = {
+        "economic_vs_technical": [
+            {"role": "system", "content": "Bạn là người điều phối. Tóm tắt và so sánh ý kiến kinh tế và kỹ thuật."},
+            {"role": "user", "content": f"Topic: {topic}\n\nKinh tế: {r1_results['economic']}\n\nKỹ thuật: {r1_results['technical']}\n\nHãy tranh luận."}
+        ],
+        "legal_vs_marketing": [
+            {"role": "system", "content": "Bạn là người điều phối. Tóm tắt và so sánh ý kiến pháp lý và marketing."},
+            {"role": "user", "content": f"Topic: {topic}\n\nPháp lý: {r1_results['legal']}\n\nMarketing: {r1_results['marketing']}\n\nHãy tranh luận."}
         ]
-
-        tasks.append(
-            loop.run_in_executor(None, goi_nvidia, cfg["model"], messages)
-        )
-
-    res = await asyncio.gather(*tasks)
-    return {k: v[0] for k, v in zip(ROLE_CONFIG.keys(), res)}
-
-# ===== VOTING =====
-async def voting(topic, results, goi_nvidia):
-    loop = asyncio.get_event_loop()
-    combined = "\n\n".join([f"{k}: {v}" for k, v in results.items()])
-
-    tasks = []
-
-    for role, cfg in ROLE_CONFIG.items():
-        messages = [
-            {"role": "system", "content": cfg["system"]},
-            {"role": "user", "content": f"""
-Chọn giải pháp tốt nhất từ các ý kiến sau:
-{combined}
-
-Chỉ trả lời: economic / technical / legal / marketing
-"""}
-        ]
-
-        tasks.append(
-            loop.run_in_executor(None, goi_nvidia, cfg["model"], messages)
-        )
-
-    votes = await asyncio.gather(*tasks)
-
-    vote_count = {}
-    for v in votes:
-        v = v[0].strip().lower()
-        vote_count[v] = vote_count.get(v, 0) + 1
-
-    return vote_count
-
-# ===== FINAL AGGREGATE =====
-def aggregate(topic, r1, r2, votes, goi_nvidia):
-    messages = [
-        {"role": "system", "content": "Bạn là CEO tổng hợp chiến lược."},
-        {"role": "user", "content": f"""
-Topic: {topic}
-
-Round1:
-{r1}
-
-Round2:
-{r2}
-
-Votes:
-{votes}
-
-Hãy đưa ra:
-- Chiến lược cuối
-- Hành động cụ thể
-- Rủi ro cần tránh
-"""}
+    }
+    
+    tasks = [
+        nvidia_caller("meta/llama-3.1-8b-instruct", debate_messages["economic_vs_technical"]),
+        nvidia_caller("meta/llama-3.1-8b-instruct", debate_messages["legal_vs_marketing"])
     ]
+    
+    results = await asyncio.gather(*tasks)
+    
+    return {
+        "eco_v_tech": results[0][0] if results[0][1] is None else f"Error: {results[0][0]}",
+        "leg_v_mkt": results[1][0] if results[1][1] is None else f"Error: {results[1][0]}"
+    }
 
-    res, _ = goi_nvidia("meta/llama-3.1-70b-instruct", messages)
-    return res
+async def voting(topic, r1_results, nvidia_caller):
+    prompt = f"Chủ đề: {topic}\n\nDựa trên các ý kiến sau, hãy bỏ phiếu cho phương án tốt nhất (kinh tế, kỹ thuật, pháp lý, marketing):\n\n"
+    for role, opinion in r1_results.items():
+        prompt += f"- {role.capitalize()}: {opinion[:200]}...\n"
+    
+    messages = [
+        {"role": "system", "content": "Bạn là người bỏ phiếu. Chỉ trả về một từ: economic, technical, legal, hoặc marketing."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    result, err = await nvidia_caller("meta/llama-3.1-8b-instruct", messages)
+    
+    if err:
+        return f"Error: {result}"
+        
+    # Basic validation
+    valid_votes = ["economic", "technical", "legal", "marketing"]
+    for vote in valid_votes:
+        if vote in result.lower():
+            return vote
+            
+    return "Không quyết định được"
+
+
+async def aggregate(topic, r1, r2, votes, nvidia_caller):
+    prompt = f'''Chủ đề: {topic}
+
+Tổng hợp tất cả thông tin sau thành một báo cáo cuối cùng.
+
+**Vòng 1 - Ý kiến ban đầu:**
+- Kinh tế: {r1['economic']}
+- Kỹ thuật: {r1['technical']}
+- Pháp lý: {r1['legal']}
+- Marketing: {r1['marketing']}
+
+**Vòng 2 - Tranh luận:**
+- Kinh tế vs Kỹ thuật: {r2['eco_v_tech']}
+- Pháp lý vs Marketing: {r2['leg_v_mkt']}
+
+**Bỏ phiếu:** Phương án được chọn là: {votes}
+
+**Yêu cầu:** Tạo báo cáo tổng hợp, giải thích tại sao phương án được chọn là tốt nhất và đề xuất các bước tiếp theo.
+'''
+    
+    messages = [
+        {"role": "system", "content": "Bạn là thư ký cuộc họp, chuyên viết báo cáo tổng kết."},
+        {"role": "user", "content": prompt}
+    ]
+    
+    result, err = await nvidia_caller("meta/llama-3.1-70b-instruct", messages, timeout=120)
+    
+    if err:
+        return f"Error: {result}"
+    return result
