@@ -355,15 +355,10 @@ async def xu_ly_skill(update: Update, response: str):
 
            result = tao_anh(prompt, style)
 
-    # ✅ Nếu là bytes (ảnh thật)
            if isinstance(result, bytes):
                await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
-
-    # ✅ Nếu là URL ảnh
            elif isinstance(result, str) and result.startswith("http"):
                await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
-
-    # ❌ Nếu là lỗi
            else:
                await update.message.reply_text(result)
 
@@ -578,7 +573,7 @@ async def files(update: Update, context: ContextTypes.DEFAULT_TYPE):
         text += icon + " " + f["name"] + "\n"
     await update.message.reply_text(text)
 
-async def read_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def read_file_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Dung: /read ten_file")
         return
@@ -751,7 +746,7 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_message(chat_id=user_id, text=f"🗳️ Votes: {votes}")
 
         # final
-        final = aggregate(tin_nhan, r1, r2, votes, goi_nvidia)
+        final = await aggregate(tin_nhan, r1, r2, votes, goi_nvidia)
         await context.bot.send_message(chat_id=user_id, text="🏆 FINAL:\n\n" + final)
 
         del meeting_sessions[user_id]
@@ -795,12 +790,32 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Kiem tra skill
     skill_done = await xu_ly_skill(update, tra_loi)
+
+    # Clean the text part of the response, removing any skill calls.
+    cleaned_tra_loi = re.sub(r'(?:\[SKILL:\w+\]\s*)?(\{"skill"\s*:\s*"(search|imagine)".*?\})', '', tra_loi, flags=re.DOTALL).strip()
+
+    # Update history with a clean response (without skill calls)
+    if d["messages"] and d["messages"][-1]["role"] == "assistant":
+        d["messages"][-1]["content"] = cleaned_tra_loi
+
+    # If a skill was successfully executed...
     if skill_done:
+        # ... and there was also text in the response, send that text.
+        if cleaned_tra_loi:
+            await update.message.reply_text(d["model_name"] + ":\n\n" + cleaned_tra_loi)
         return
 
-    if len(tra_loi) > 4096:
-        tra_loi = tra_loi[:4090] + "..."
-    await update.message.reply_text(d["model_name"] + ":\n\n" + tra_loi)
+    # If no skill was executed (or it failed) and the cleaned response is empty...
+    if not cleaned_tra_loi:
+        # ...then send a generic error instead of an empty message or raw JSON.
+        await update.message.reply_text("🤖 Đã có lỗi khi thực hiện tác vụ. Vui lòng thử lại.")
+        return
+
+    # Otherwise, this was a regular text response. Send the cleaned version.
+    if len(cleaned_tra_loi) > 4096:
+        cleaned_tra_loi = cleaned_tra_loi[:4090] + "..."
+    await update.message.reply_text(d["model_name"] + ":\n\n" + cleaned_tra_loi)
+
 
 # ===== CHAY BOT =====
 print("Dang load user data tu GitHub...")
@@ -821,7 +836,7 @@ app.add_handler(CommandHandler("anime", anime))
 app.add_handler(CommandHandler("real", real))
 app.add_handler(CommandHandler("cinematic", cinematic))
 app.add_handler(CommandHandler("files", files))
-app.add_handler(CommandHandler("read", read_file))
+app.add_handler(CommandHandler("read", read_file_command))
 app.add_handler(CommandHandler("edit", edit_file))
 app.add_handler(CommandHandler("push", push_file))
 app.add_handler(CommandHandler("cancel", cancel))
