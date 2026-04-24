@@ -5,7 +5,7 @@ import requests
 import base64
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from meeting_mode import is_meeting_prompt, run_roles, debate, aggregate
+from meeting_mode import is_meeting_prompt, run_roles, debate, aggregate, voting
 
 # ===== ENV VARIABLES =====
 TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
