@@ -820,7 +820,7 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Loi: " + tra_loi)
         return
 
-    skill_done, skill_text = await xu_ly_skill(update, tra_loi)
+    skill_done, skill_text = await xu_ly_skill(update, tra_loi, user_id)
 
     cleaned_tra_loi = tra_loi
     if skill_text:
