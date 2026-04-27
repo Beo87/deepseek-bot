@@ -331,7 +331,7 @@ def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"
 # ===== SKILL DISPATCHER =====
 
 async def xu_ly_skill(update: Update, response: str):
-    match = re.search(r'(?:\[SKILL:\w+\]\s*)?(\{"skill"\s*:\s*"(search|imagine)".*?\})', response, re.DOTALL)
+    match = re.search(r'(?:\[SKILL:\w+\]\s*)?(\{\"skill\"\s*:\s*\"(search|imagine)\".*?\})', response, re.DOTALL)
     if not match:
         return False, None
 
@@ -779,7 +779,7 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     messages_to_send.append({"role": "system", "content": "\n\n".join(system_parts)})
     messages_to_send.extend(d["messages"])
 
-    tra_loi, err_type = goi_nvidia(d["model_id"], messages_to_send)
+    tra_loi, err_type = await goi_nvidia(d["model_id"], messages_to_send)
 
     if err_type == "timeout":
         d["messages"].pop()
@@ -804,6 +804,9 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not cleaned_tra_loi.strip():
+         # If skill was done, we already sent the skill result, so just return
+         if skill_done:
+             return
          await update.message.reply_text("🤖 Đã có lỗi khi thực hiện tác vụ. Vui lòng thử lại.")
          return
 
