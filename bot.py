@@ -227,34 +227,47 @@ async def goi_nvidia(model_id, messages, timeout=45):
     except Exception as e:
         return "Loi ket noi: " + str(e), "error"
 
-# ===== SKILL: WEB SEARCH (Tavily) =====
+# ===
+# ===== SKILL: WEB SEARCH (Google News + Bing News RSS) =====
 
 def web_search(query, max_results=5):
+    import xml.etree.ElementTree as ET
+    from urllib.parse import quote
+
+    results = []
+
+    # Google News RSS
     try:
-        r = requests.post(
-            "https://api.tavily.com/search",
-            headers={"Content-Type": "application/json"},
-            json={
-                "api_key": TAVILY_API_KEY,
-                "query": query,
-                "max_results": max_results,
-                "search_depth": "basic"
-            },
-            timeout=15
-        )
-        data = r.json()
-        results = data.get("results", [])
-        if not results:
-            return "Khong tim thay ket qua cho: " + query
-        lines = []
-        for item in results:
-            title = item.get("title", "")
-            content = item.get("content", "")[:150]
-            url = item.get("url", "")
-            lines.append("• " + title + "\n  " + content + "...\n  " + url)
-        return "\n\n".join(lines)
+        gurl = "https://news.google.com/rss/search?q=" + quote(query) + "&hl=vi&gl=VN&ceid=VN:vi"
+        r = requests.get(gurl, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+        root = ET.fromstring(r.content)
+        for item in root.findall(".//item")[:max_results]:
+            title   = item.findtext("title", "").strip()
+            link    = item.findtext("link", "").strip()
+            pubdate = item.findtext("pubDate", "").strip()
+            if title:
+                results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}")
     except Exception as e:
-        return "Loi web search: " + str(e)
+        results.append("Loi Google News: " + str(e))
+
+    # Bing News RSS (bo sung neu Google it ket qua)
+    if len(results) < max_results:
+        try:
+            burl = "https://www.bing.com/news/search?q=" + quote(query) + "&format=RSS"
+            r = requests.get(burl, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+            root = ET.fromstring(r.content)
+            for item in root.findall(".//item")[:max_results - len(results)]:
+                title   = item.findtext("title", "").strip()
+                link    = item.findtext("link", "").strip()
+                pubdate = item.findtext("pubDate", "").strip()
+                if title:
+                    results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}")
+        except Exception as e:
+            results.append("Loi Bing News: " + str(e))
+
+    if not results:
+        return "Khong tim thay ket qua cho: " + query
+    return "\n\n".join(results)
 
 # ===== SKILL: IMAGE GENERATION (FLUX.1-schnell) =====
 
@@ -343,9 +356,31 @@ async def xu_ly_skill(update: Update, response: str):
         if skill == "search":
             query = skill_data.get("query", "")
             await update.message.reply_chat_action("typing")
-            result = web_search(query)
-            await update.message.reply_text("🔍 " + query + "\n\n" + result)
-            return True, skill_json_string
+            raw = web_search(query)
+
+            # Cho model tong hop tin
+            d = user_data.get(update.message.from_user.id, {})
+            model_id = d.get("model_id", "meta/llama-3.1-8b-instruct")
+            model_name = d.get("model_name", "AI")
+
+            tong_hop_prompt = [
+                {
+                    "role": "system",
+                    "content": "Ban la tro ly tong hop tin tuc. Hay doc cac tin ben duoi va tong hop thanh 1 doan ngan gon, ro rang, theo dung yeu cau cua nguoi dung. Dung markdown."
+                },
+                {
+                    "role": "user",
+                    "content": "Yeu cau: " + query + "\n\nDu lieu tin tuc:\n" + raw + "\n\nHay tong hop ngan gon."
+                }
+            ]
+
+            tong_hop, err = goi_nvidia(model_id, tong_hop_prompt, timeout=30)
+            if err or not tong_hop:
+                # Fallback: hien thi raw neu model loi
+                await update.message.reply_text("🔍 " + query + "\n\n" + raw)
+            else:
+                await update.message.reply_text("🔍 " + query + "\n\n" + tong_hop)
+            return True
 
         if skill == "imagine":
             prompt = skill_data.get("prompt", "")
@@ -718,10 +753,28 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if tin_lower.startswith("search "):
         query = tin_nhan[7:].strip()
         await update.message.reply_chat_action("typing")
-        result = web_search(query)
-        await update.message.reply_text("🔍 " + query + "\n\n" + result)
-        return
+        raw = web_search(query)
 
+        d = user_data.get(user_id, {})
+        model_id = d.get("model_id", "meta/llama-3.1-8b-instruct")
+
+        tong_hop_prompt = [
+            {
+                "role": "system",
+                "content": "Ban la tro ly tong hop tin tuc. Hay doc cac tin ben duoi va tong hop thanh 1 doan ngan gon, ro rang. Dung markdown."
+            },
+            {
+                "role": "user",
+                "content": "Yeu cau: " + query + "\n\nDu lieu tin tuc:\n" + raw + "\n\nHay tong hop ngan gon."
+            }
+        ]
+
+        tong_hop, err = goi_nvidia(model_id, tong_hop_prompt, timeout=30)
+        if err or not tong_hop:
+            await update.message.reply_text("🔍 " + query + "\n\n" + raw)
+        else:
+            await update.message.reply_text("🔍 " + query + "\n\n" + tong_hop)
+        return
     if tin_lower.startswith("remember "):
         args = tin_nhan[9:].strip().split()
         memory, _ = load_memory(user_id)
