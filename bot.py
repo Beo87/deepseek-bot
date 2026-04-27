@@ -245,8 +245,9 @@ def web_search(query, max_results=5):
             title   = item.findtext("title", "").strip()
             link    = item.findtext("link", "").strip()
             pubdate = item.findtext("pubDate", "").strip()
+            description = item.findtext("description", "").strip()
             if title:
-                results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}")
+                results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}\n 📝 {description}")
     except requests.exceptions.RequestException as e:
         results.append("Loi Google News: " + str(e))
     except Exception as e:
@@ -262,8 +263,9 @@ def web_search(query, max_results=5):
                 title   = item.findtext("title", "").strip()
                 link    = item.findtext("link", "").strip()
                 pubdate = item.findtext("pubDate", "").strip()
+                description = item.findtext("description", "").strip()
                 if title:
-                    results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}")
+                    results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}\n 📝 {description}")
         except requests.exceptions.RequestException as e:
             results.append("Loi Bing News: " + str(e))
         except Exception as e:
