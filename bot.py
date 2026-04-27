@@ -3,6 +3,9 @@ import json
 import re
 import requests
 import base64
+import random
+import xml.etree.ElementTree as ET
+from urllib.parse import quote
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
 from meeting_mode import is_meeting_prompt, is_stop_meeting_prompt, run_roles, debate, aggregate, voting
@@ -231,9 +234,6 @@ async def goi_nvidia(model_id, messages, timeout=45):
 # ===== SKILL: WEB SEARCH (Google News + Bing News RSS) =====
 
 def web_search(query, max_results=5):
-    import xml.etree.ElementTree as ET
-    from urllib.parse import quote
-
     results = []
 
     # Google News RSS
@@ -275,9 +275,6 @@ def web_search(query, max_results=5):
 
 # ===== SKILL: IMAGE GENERATION (FLUX.1-schnell) =====
 
-import urllib.parse
-import random
-
 def tao_anh(prompt, style=None):
     base = ", ultra detailed, 8k"
 
@@ -292,7 +289,7 @@ def tao_anh(prompt, style=None):
 
     # ⚡ Pollinations (fast)
     try:
-        prompt_encoded = urllib.parse.quote(prompt)
+        prompt_encoded = quote(prompt)
         seed = random.randint(1, 999999)
         return f"https://image.pollinations.ai/prompt/{prompt_encoded}?seed={seed}"
     except:
