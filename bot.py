@@ -247,6 +247,8 @@ def web_search(query, max_results=5):
             pubdate = item.findtext("pubDate", "").strip()
             if title:
                 results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}")
+    except requests.exceptions.RequestException as e:
+        results.append("Loi Google News: " + str(e))
     except Exception as e:
         results.append("Loi Google News: " + str(e))
 
@@ -262,6 +264,8 @@ def web_search(query, max_results=5):
                 pubdate = item.findtext("pubDate", "").strip()
                 if title:
                     results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}")
+        except requests.exceptions.RequestException as e:
+            results.append("Loi Bing News: " + str(e))
         except Exception as e:
             results.append("Loi Bing News: " + str(e))
 
@@ -343,15 +347,15 @@ def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"
 
 # ===== SKILL DISPATCHER =====
 
-async def xu_ly_skill(update: Update, response: str):
 async def xu_ly_skill(update: Update, response: str, user_id: int):
     if "[SKILL:" not in response:
-        return False
+        return False, None
     try:
         # Tìm JSON trong response
         start = response.index("{")
         end   = response.rindex("}") + 1
-        skill_data = json.loads(response[start:end])
+        skill_json = response[start:end]
+        skill_data = json.loads(skill_json)
         skill = skill_data.get("skill")
 
         if skill == "search":
@@ -365,8 +369,10 @@ async def xu_ly_skill(update: Update, response: str, user_id: int):
                 {"role": "system", "content": "Tong hop tin tuc ngan gon, ro rang bang tieng Viet."},
                 {"role": "user", "content": "Yeu cau: " + query + "\n\nTin tuc:\n" + raw}
             ], timeout=30)
-            await update.message.reply_text("🔍 " + query + "\n\n" + (tong_hop if not err else raw))
-            return True
+            
+            full_response_text = "🔍 " + query + "\n\n" + (tong_hop if not err else raw)
+            await update.message.reply_text(full_response_text)
+            return True, f"[SKILL:search] {skill_json}"
 
         if skill == "imagine":
             prompt = skill_data.get("prompt", "")
@@ -377,11 +383,14 @@ async def xu_ly_skill(update: Update, response: str, user_id: int):
                 await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
             else:
                 await update.message.reply_text(result)
-            return True
+            return True, f"[SKILL:imagine] {skill_json}"
 
     except Exception as e:
-        pass
-    return False
+        # Return False and the original response so the bot can display the raw text
+        return False, None
+        
+    return False, None
+
 
 # ===== BOT COMMANDS =====
 
