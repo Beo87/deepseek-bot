@@ -359,15 +359,8 @@ async def xu_ly_skill(update: Update, response: str, user_id: int):
             query = skill_data.get("query", "")
             await update.message.reply_chat_action("typing")
             raw = web_search(query)
-
-            d = user_data.get(user_id, {})
-            model_id = d.get("model_id", "meta/llama-3.1-8b-instruct")
-            tong_hop, err = goi_nvidia(model_id, [
-                {"role": "system", "content": "Tong hop tin tuc ngan gon, ro rang bang tieng Viet."},
-                {"role": "user", "content": "Yeu cau: " + query + "\n\nTin tuc:\n" + raw}
-            ], timeout=30)
             
-            full_response_text = "🔍 " + query + "\n\n" + (tong_hop if not err else raw)
+            full_response_text = "🔍 " + query + "\n\n" + raw
             await update.message.reply_text(full_response_text)
             return True, f"[SKILL:search] {skill_json}"
 
@@ -737,26 +730,7 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         query = tin_nhan[7:].strip()
         await update.message.reply_chat_action("typing")
         raw = web_search(query)
-
-        d = user_data.get(user_id, {})
-        model_id = d.get("model_id", "meta/llama-3.1-8b-instruct")
-
-        tong_hop_prompt = [
-            {
-                "role": "system",
-                "content": "Ban la tro ly tong hop tin tuc. Hay doc cac tin ben duoi va tong hop thanh 1 doan ngan gon, ro rang. Dung markdown."
-            },
-            {
-                "role": "user",
-                "content": "Yeu cau: " + query + "\n\nDu lieu tin tuc:\n" + raw + "\n\nHay tong hop ngan gon."
-            }
-        ]
-
-        tong_hop, err = goi_nvidia(model_id, tong_hop_prompt, timeout=30)
-        if err or not tong_hop:
-            await update.message.reply_text("🔍 " + query + "\n\n" + raw)
-        else:
-            await update.message.reply_text("🔍 " + query + "\n\n" + tong_hop)
+        await update.message.reply_text("🔍 " + query + "\n\n" + raw)
         return
     if tin_lower.startswith("remember "):
         args = tin_nhan[9:].strip().split()
