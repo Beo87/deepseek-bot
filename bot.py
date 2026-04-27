@@ -344,13 +344,14 @@ def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"
 # ===== SKILL DISPATCHER =====
 
 async def xu_ly_skill(update: Update, response: str):
-    match = re.search(r'(?:\[SKILL:\w+\]\s*)?(\{\"skill\"\s*:\s*\"(search|imagine)\".*?\})', response, re.DOTALL)
-    if not match:
-        return False, None
-
+async def xu_ly_skill(update: Update, response: str, user_id: int):
+    if "[SKILL:" not in response:
+        return False
     try:
-        skill_json_string = match.group(1)
-        skill_data = json.loads(skill_json_string)
+        # Tìm JSON trong response
+        start = response.index("{")
+        end   = response.rindex("}") + 1
+        skill_data = json.loads(response[start:end])
         skill = skill_data.get("skill")
 
         if skill == "search":
@@ -358,53 +359,29 @@ async def xu_ly_skill(update: Update, response: str):
             await update.message.reply_chat_action("typing")
             raw = web_search(query)
 
-            # Cho model tong hop tin
-            d = user_data.get(update.message.from_user.id, {})
+            d = user_data.get(user_id, {})
             model_id = d.get("model_id", "meta/llama-3.1-8b-instruct")
-            model_name = d.get("model_name", "AI")
-
-            tong_hop_prompt = [
-                {
-                    "role": "system",
-                    "content": "Ban la tro ly tong hop tin tuc. Hay doc cac tin ben duoi va tong hop thanh 1 doan ngan gon, ro rang, theo dung yeu cau cua nguoi dung. Dung markdown."
-                },
-                {
-                    "role": "user",
-                    "content": "Yeu cau: " + query + "\n\nDu lieu tin tuc:\n" + raw + "\n\nHay tong hop ngan gon."
-                }
-            ]
-
-            tong_hop, err = goi_nvidia(model_id, tong_hop_prompt, timeout=30)
-            if err or not tong_hop:
-                # Fallback: hien thi raw neu model loi
-                await update.message.reply_text("🔍 " + query + "\n\n" + raw)
-            else:
-                await update.message.reply_text("🔍 " + query + "\n\n" + tong_hop)
+            tong_hop, err = goi_nvidia(model_id, [
+                {"role": "system", "content": "Tong hop tin tuc ngan gon, ro rang bang tieng Viet."},
+                {"role": "user", "content": "Yeu cau: " + query + "\n\nTin tuc:\n" + raw}
+            ], timeout=30)
+            await update.message.reply_text("🔍 " + query + "\n\n" + (tong_hop if not err else raw))
             return True
 
         if skill == "imagine":
             prompt = skill_data.get("prompt", "")
-            style = skill_data.get("style")
-
             await update.message.reply_text("🎨 Dang tao anh...")
             await update.message.reply_chat_action("upload_photo")
-            result = tao_anh(prompt, style)
-
+            result = tao_anh(prompt)
             if isinstance(result, bytes):
-                await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
-            elif isinstance(result, str) and result.startswith("http"):
                 await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
             else:
                 await update.message.reply_text(result)
-            return True, skill_json_string
+            return True
 
-    except json.JSONDecodeError:
-        # The model tried to use a skill but failed. We will hide the error.
-        return False, match.group(0) # Return the whole matched string to be cleaned
-    except Exception:
-        return False, None
-
-    return False, None
+    except Exception as e:
+        pass
+    return False
 
 # ===== BOT COMMANDS =====
 
