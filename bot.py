@@ -396,7 +396,7 @@ async def xu_ly_skill(update: Update, response: str, user_id: int):
             if isinstance(result, bytes):
                 await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
             else:
-                await update.message.reply_text(result)
+                await update.message.reply_text(result, disable_web_page_preview=True)
             return True, f"[SKILL:imagine] {skill_json}"
 
     except Exception as e:
