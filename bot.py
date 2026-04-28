@@ -164,6 +164,9 @@ def save_user_data():
         create_file_github(USER_DATA_FILE, content_str, "Create user data")
 
 def load_user_data():
+    if not GITHUB_REPO or not GITHUB_TOKEN:
+        print("Warning: GITHUB_REPO or GITHUB_TOKEN not set. Skipping user data load.")
+        return
     content, _ = get_file(USER_DATA_FILE)
     if not content:
         return
@@ -231,12 +234,12 @@ async def goi_nvidia(model_id, messages, timeout=45):
         return "Loi ket noi: " + str(e), "error"
 
 # ===
-# ===== SKILL: WEB SEARCH (Google News + Bing News RSS) =====
+# ===== SKILL: WEB SEARCH (Google News RSS First, then Bing News, then Tavily API) =====
 
 def web_search(query, max_results=5):
     results = []
 
-    # Google News RSS
+    # Google News RSS (primary method)
     try:
         gurl = "https://news.google.com/rss/search?q=" + quote(query) + "&hl=vi&gl=VN&ceid=VN:vi"
         r = requests.get(gurl, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
@@ -270,6 +273,25 @@ def web_search(query, max_results=5):
             results.append("Loi Bing News: " + str(e))
         except Exception as e:
             results.append("Loi Bing News: " + str(e))
+
+    # Tavily Search API (fallback if RSS feeds insufficient)
+    if len(results) < max_results and TAVILY_API_KEY:
+        try:
+            from tavily import TavilyClient
+            client = TavilyClient(api_key=TAVILY_API_KEY)
+            response = client.search(query, max_results=max_results - len(results))
+            for result in response.get("results", []):
+                title = result.get("title", "").strip()
+                url = result.get("url", "").strip()
+                content = result.get("content", "").strip()
+                if title and url:
+                    results.append(f"📰 {title}\n  📝 {content}\n  🔗 {url}")
+        except ImportError:
+            pass  # Tavily not installed
+        except requests.exceptions.RequestException as e:
+            results.append("Loi Tavily: " + str(e))
+        except Exception as e:
+            results.append("Loi Tavily: " + str(e))
 
     if not results:
         return "Khong tim thay ket qua cho: " + query
