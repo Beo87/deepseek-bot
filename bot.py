@@ -236,6 +236,18 @@ async def goi_nvidia(model_id, messages, timeout=45):
 # ===
 # ===== SKILL: WEB SEARCH (Google News RSS First, then Bing News, then Tavily API) =====
 
+def clean_html(text):
+    """Remove HTML tags from text"""
+    if not text:
+        return ""
+    # Remove <a> tags and keep only the text content
+    text = re.sub(r'<a[^>]*>([^<]+)</a>', r'\1', text)
+    # Remove all other HTML tags
+    text = re.sub(r'<[^>]+>', '', text)
+    # Remove HTML entities
+    text = text.replace('&nbsp;', ' ').replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>').replace('&quot;', '"')
+    return text.strip()
+
 def web_search(query, max_results=5):
     results = []
 
@@ -245,12 +257,11 @@ def web_search(query, max_results=5):
         r = requests.get(gurl, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
         root = ET.fromstring(r.content)
         for item in root.findall(".//item")[:max_results]:
-            title   = item.findtext("title", "").strip()
-            link    = item.findtext("link", "").strip()
+            title   = clean_html(item.findtext("title", "")).strip()
             pubdate = item.findtext("pubDate", "").strip()
-            description = item.findtext("description", "").strip()
+            description = clean_html(item.findtext("description", "")).strip()
             if title:
-                results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}\n 📝 {description}")
+                results.append(f"📰 {title}\n  🕐 {pubdate}\n  📝 {description}")
     except requests.exceptions.RequestException as e:
         results.append("Loi Google News: " + str(e))
     except Exception as e:
@@ -263,12 +274,11 @@ def web_search(query, max_results=5):
             r = requests.get(burl, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
             root = ET.fromstring(r.content)
             for item in root.findall(".//item")[:max_results - len(results)]:
-                title   = item.findtext("title", "").strip()
-                link    = item.findtext("link", "").strip()
+                title   = clean_html(item.findtext("title", "")).strip()
                 pubdate = item.findtext("pubDate", "").strip()
-                description = item.findtext("description", "").strip()
+                description = clean_html(item.findtext("description", "")).strip()
                 if title:
-                    results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}\n 📝 {description}")
+                    results.append(f"📰 {title}\n  🕐 {pubdate}\n  📝 {description}")
         except requests.exceptions.RequestException as e:
             results.append("Loi Bing News: " + str(e))
         except Exception as e:
@@ -281,11 +291,10 @@ def web_search(query, max_results=5):
             client = TavilyClient(api_key=TAVILY_API_KEY)
             response = client.search(query, max_results=max_results - len(results))
             for result in response.get("results", []):
-                title = result.get("title", "").strip()
-                url = result.get("url", "").strip()
-                content = result.get("content", "").strip()
-                if title and url:
-                    results.append(f"📰 {title}\n  📝 {content}\n  🔗 {url}")
+                title = clean_html(result.get("title", "")).strip()
+                content = clean_html(result.get("content", "")).strip()
+                if title and content:
+                    results.append(f"📰 {title}\n  📝 {content}")
         except ImportError:
             pass  # Tavily not installed
         except requests.exceptions.RequestException as e:
