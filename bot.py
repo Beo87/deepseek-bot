@@ -250,7 +250,7 @@ def web_search(query, max_results=5):
             pubdate = item.findtext("pubDate", "").strip()
             description = item.findtext("description", "").strip()
             if title:
-                results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}\n 📝 {description}")
+                results.append(f"📰 {title}\n  🕐 {pubdate}\n  📝 {description}")
     except requests.exceptions.RequestException as e:
         results.append("Loi Google News: " + str(e))
     except Exception as e:
@@ -268,7 +268,7 @@ def web_search(query, max_results=5):
                 pubdate = item.findtext("pubDate", "").strip()
                 description = item.findtext("description", "").strip()
                 if title:
-                    results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}\n 📝 {description}")
+                    results.append(f"📰 {title}\n  🕐 {pubdate}\n  📝 {description}")
         except requests.exceptions.RequestException as e:
             results.append("Loi Bing News: " + str(e))
         except Exception as e:
@@ -282,10 +282,9 @@ def web_search(query, max_results=5):
             response = client.search(query, max_results=max_results - len(results))
             for result in response.get("results", []):
                 title = result.get("title", "").strip()
-                url = result.get("url", "").strip()
                 content = result.get("content", "").strip()
-                if title and url:
-                    results.append(f"📰 {title}\n  📝 {content}\n  🔗 {url}")
+                if title and content:
+                    results.append(f"📰 {title}\n  📝 {content}")
         except ImportError:
             pass  # Tavily not installed
         except requests.exceptions.RequestException as e:
