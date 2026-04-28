@@ -311,15 +311,7 @@ def tao_anh(prompt, style=None):
     else:
         prompt += base
 
-    # ⚡ Pollinations (fast)
-    try:
-        prompt_encoded = quote(prompt)
-        seed = random.randint(1, 999999)
-        return f"https://image.pollinations.ai/prompt/{prompt_encoded}?seed={seed}"
-    except:
-        pass
-
-    # 🔁 HuggingFace fallback
+    # 🎨 HuggingFace FLUX.1-schnell (Primary)
     try:
         r = requests.post(
             "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
@@ -336,6 +328,14 @@ def tao_anh(prompt, style=None):
 
         if r.status_code == 200 and "image" in r.headers.get("content-type", ""):
             return r.content
+    except:
+        pass
+
+    # ⚡ Pollinations (Fallback - fast URL)
+    try:
+        prompt_encoded = quote(prompt)
+        seed = random.randint(1, 999999)
+        return f"https://image.pollinations.ai/prompt/{prompt_encoded}?seed={seed}"
     except:
         pass
 
@@ -385,7 +385,7 @@ async def xu_ly_skill(update: Update, response: str, user_id: int):
             raw = web_search(query)
             
             full_response_text = "🔍 " + query + "\n\n" + raw
-            await update.message.reply_text(full_response_text)
+            await update.message.reply_text(full_response_text, disable_web_page_preview=True)
             return True, f"[SKILL:search] {skill_json}"
 
         if skill == "imagine":
