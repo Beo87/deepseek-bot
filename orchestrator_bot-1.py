@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-import aiohttp
+import httpx
 from telegram import BotCommand, Update
 from telegram.constants import ParseMode
 from telegram.error import Conflict, NetworkError, TelegramError
@@ -173,18 +173,18 @@ class MemorySystem:
             return
 
         try:
-            async with aiohttp.ClientSession() as session:
-                async with session.get(self._gh_url(), headers=self._gh_headers(), timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status == 200:
-                        payload = await resp.json()
-                        raw = base64.b64decode(payload["content"]).decode("utf-8")
-                        async with self._lock:
-                            self._data = json.loads(raw)
-                        logger.info(f"✅ Đã tải memory từ GitHub ({len(self._data)} users)")
-                    elif resp.status == 404:
-                        logger.info("memory.json chưa tồn tại trên GitHub — sẽ tạo khi lưu lần đầu")
-                    else:
-                        logger.warning(f"GitHub load trả về status {resp.status}")
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(self._gh_url(), headers=self._gh_headers())
+                if resp.status_code == 200:
+                    payload = resp.json()
+                    raw = base64.b64decode(payload["content"]).decode("utf-8")
+                    async with self._lock:
+                        self._data = json.loads(raw)
+                    logger.info(f"✅ Đã tải memory từ GitHub ({len(self._data)} users)")
+                elif resp.status_code == 404:
+                    logger.info("memory.json chưa tồn tại trên GitHub — sẽ tạo khi lưu lần đầu")
+                else:
+                    logger.warning(f"GitHub load trả về status {resp.status_code}")
         except Exception as e:
             logger.error(f"Lỗi tải memory từ GitHub: {e}")
 
@@ -203,18 +203,17 @@ class MemorySystem:
         }
 
         try:
-            async with aiohttp.ClientSession() as session:
+            async with httpx.AsyncClient(timeout=15) as client:
                 # Lấy SHA để update (nếu file đã tồn tại)
-                async with session.get(self._gh_url(), headers=self._gh_headers(), timeout=aiohttp.ClientTimeout(total=10)) as resp:
-                    if resp.status == 200:
-                        body["sha"] = (await resp.json()).get("sha", "")
+                check = await client.get(self._gh_url(), headers=self._gh_headers())
+                if check.status_code == 200:
+                    body["sha"] = check.json().get("sha", "")
 
-                async with session.put(self._gh_url(), json=body, headers=self._gh_headers(), timeout=aiohttp.ClientTimeout(total=15)) as resp:
-                    if resp.status in (200, 201):
-                        logger.debug("✅ Memory đã lưu lên GitHub")
-                    else:
-                        text = await resp.text()
-                        logger.error(f"Lỗi lưu GitHub {resp.status}: {text[:200]}")
+                resp = await client.put(self._gh_url(), json=body, headers=self._gh_headers())
+                if resp.status_code in (200, 201):
+                    logger.debug("✅ Memory đã lưu lên GitHub")
+                else:
+                    logger.error(f"Lỗi lưu GitHub {resp.status_code}: {resp.text[:200]}")
         except Exception as e:
             logger.error(f"Lỗi kết nối GitHub khi lưu: {e}")
 
@@ -334,40 +333,38 @@ class AIEngine:
         }
 
         last_error: str = "Lỗi không xác định"
-        timeout = aiohttp.ClientTimeout(total=self._cfg.request_timeout)
 
         for attempt in range(retries + 1):
             try:
-                async with aiohttp.ClientSession() as session:
-                    async with session.post(
+                async with httpx.AsyncClient(timeout=self._cfg.request_timeout) as client:
+                    resp = await client.post(
                         self._cfg.nvidia_api_url,
                         json=payload,
                         headers=self._headers,
-                        timeout=timeout,
-                    ) as resp:
-                        if resp.status == 429:
-                            return "⏳ API đang quá tải. Vui lòng thử lại sau vài giây."
-                        if resp.status == 401:
-                            return "❌ NVIDIA API Key không hợp lệ hoặc đã hết hạn."
-                        if resp.status >= 500:
-                            last_error = f"Server NVIDIA lỗi (HTTP {resp.status})"
-                            await asyncio.sleep(2 ** attempt)
-                            continue
+                    )
+                    if resp.status_code == 429:
+                        return "⏳ API đang quá tải. Vui lòng thử lại sau vài giây."
+                    if resp.status_code == 401:
+                        return "❌ NVIDIA API Key không hợp lệ hoặc đã hết hạn."
+                    if resp.status_code >= 500:
+                        last_error = f"Server NVIDIA lỗi (HTTP {resp.status_code})"
+                        await asyncio.sleep(2 ** attempt)
+                        continue
 
-                        resp.raise_for_status()
-                        data = await resp.json()
+                    resp.raise_for_status()
+                    data = resp.json()
 
-                        choices = data.get("choices", [])
-                        if not choices:
-                            return "⚠️ API không trả về kết quả hợp lệ."
+                    choices = data.get("choices", [])
+                    if not choices:
+                        return "⚠️ API không trả về kết quả hợp lệ."
 
-                        return choices[0]["message"]["content"].strip()
+                    return choices[0]["message"]["content"].strip()
 
-            except asyncio.TimeoutError:
+            except httpx.TimeoutException:
                 last_error = "timeout"
                 logger.warning(f"API timeout (attempt {attempt + 1}/{retries + 1})")
                 await asyncio.sleep(1)
-            except aiohttp.ClientError as e:
+            except httpx.HTTPError as e:
                 last_error = str(e)
                 logger.error(f"Lỗi mạng khi gọi API: {e}")
                 await asyncio.sleep(1)
