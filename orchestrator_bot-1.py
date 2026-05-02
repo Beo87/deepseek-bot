@@ -600,6 +600,7 @@ class OrchestratorBot:
             ApplicationBuilder()
             .token(self._cfg.telegram_token)
             .concurrent_updates(True)
+            .post_init(self._post_init)
             .build()
         )
 
@@ -620,32 +621,33 @@ class OrchestratorBot:
 
         return app
 
-    async def run(self) -> None:
-        """Load memory → set commands → start polling."""
-        logger.info("🚀 Đang khởi động bot...")
-
-        # Load memory từ GitHub (nếu có)
+    async def _post_init(self, app: Application) -> None:
+        """
+        Hook chạy SAU khi Application khởi tạo, TRƯỚC khi polling.
+        Cách duy nhất an toàn để chạy async setup trong PTB v20+.
+        """
+        logger.info("🔧 Đang khởi tạo bot...")
         await self._memory.load()
-
-        app = self.build_app()
-
-        # Set bot commands menu
         await app.bot.set_my_commands([
-            BotCommand("start",   "Màn hình chào mừng"),
-            BotCommand("agents",  "Danh sách agent"),
-            BotCommand("memory",  "Xem lịch sử chat"),
-            BotCommand("clear",   "Xóa lịch sử"),
-            BotCommand("stats",   "Thống kê sử dụng"),
-            BotCommand("help",    "Hướng dẫn sử dụng"),
+            BotCommand("start",  "Màn hình chào mừng"),
+            BotCommand("agents", "Danh sách agent"),
+            BotCommand("memory", "Xem lịch sử chat"),
+            BotCommand("clear",  "Xóa lịch sử"),
+            BotCommand("stats",  "Thống kê sử dụng"),
+            BotCommand("help",   "Hướng dẫn sử dụng"),
         ])
-
         logger.info(f"✅ Bot sẵn sàng | Model: {self._cfg.model}")
 
-        # Polling với drop_pending_updates để tránh lỗi Conflict
-        await app.run_polling(
+    def run(self) -> None:
+        """
+        PTB v20+ tự quản lý event loop nội bộ.
+        KHÔNG dùng asyncio.run() hay await run_polling().
+        """
+        app = self.build_app()
+        # run_polling() là synchronous — tự tạo & quản lý event loop
+        app.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES,
-            close_loop=False,
         )
 
 
@@ -656,9 +658,8 @@ class OrchestratorBot:
 def main() -> None:
     config = Config.from_env()
     bot = OrchestratorBot(config)
-
     try:
-        asyncio.run(bot.run())
+        bot.run()   # ← synchronous, KHÔNG asyncio.run()
     except KeyboardInterrupt:
         logger.info("⛔ Bot đã dừng bởi người dùng (Ctrl+C)")
     except Exception as e:
