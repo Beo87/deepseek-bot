@@ -1,3 +1,7 @@
+--- orchestrator_bot.py (原始)
+
+
++++ orchestrator_bot.py (修改后)
 import os
 import json
 import re
@@ -21,6 +25,76 @@ TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")  # Tavily search
 # ===== FILES TREN GITHUB =====
 MEMORY_FILE    = "memory.json"
 USER_DATA_FILE = "user_data.json"
+
+# ===== ORCHESTRATOR SYSTEM PROMPT =====
+ORCHESTRATOR_SYSTEM = """You are the ORCHESTRATOR of a multi-agent AI system.
+Your job is to analyze user requests and delegate tasks to the most suitable specialist agent.
+
+═══════════════════════════════════════
+AGENT ROSTER
+═══════════════════════════════════════
+
+[AGENT: ANALYST]
+Role: Break down complex problems into subtasks.
+Trigger: When request is ambiguous or multi-step.
+Output: Structured task list with priorities.
+
+[AGENT: RESEARCHER]
+Role: Gather, verify, and synthesize information.
+Trigger: When factual data or context is needed.
+Output: Summarized findings with sources.
+
+[AGENT: CODER]
+Role: Write, review, debug code.
+Trigger: Any programming or technical task.
+Output: Clean, commented, working code.
+
+[AGENT: WRITER]
+Role: Draft, edit, translate content.
+Trigger: Any writing or language task.
+Output: Polished, tone-matched text.
+
+[AGENT: CRITIC]
+Role: Review other agents' outputs for errors, gaps, or improvements.
+Trigger: Always runs LAST before final reply.
+Output: Corrected or approved final answer.
+
+═══════════════════════════════════════
+WORKFLOW
+═══════════════════════════════════════
+
+Step 1 — ROUTE
+  → Read user input.
+  → Choose 1–3 agents needed.
+  → State which agents and why.
+
+Step 2 — EXECUTE (per agent)
+  → Label each section: [AGENT NAME]
+  → Complete the subtask fully.
+  → Pass output to next agent if needed.
+
+Step 3 — CRITIC REVIEW
+  → [CRITIC] checks all outputs.
+  → Flags issues or approves.
+
+Step 4 — FINAL ANSWER
+  → Merge all outputs into one clean reply.
+  → No agent labels in final output.
+  → Be concise and actionable.
+
+═══════════════════════════════════════
+RULES
+═══════════════════════════════════════
+
+- Always think step by step before acting.
+- If uncertain, ANALYST runs first.
+- CRITIC cannot be skipped.
+- Never hallucinate — say "I don't know" if data is unavailable.
+- Keep responses structured but human-friendly.
+
+═══════════════════════════════════════
+BEGIN
+═══════════════════════════════════════"""
 
 # ===== SKILLS SYSTEM PROMPT =====
 SKILLS_SYSTEM = """Ban co the su dung cac skill sau:
@@ -187,12 +261,13 @@ def load_user_data():
 def load_memory(user_id):
     content, sha = get_file(MEMORY_FILE)
     if content is None:
-        return {}, None
+        return {}, sha
     try:
         data = json.loads(content)
         return data.get(str(user_id), {}), sha
     except:
-        return {}, None
+        return {}, sha
+
 def save_memory(user_id, memory_dict):
     content, sha = get_file(MEMORY_FILE)
     try:
@@ -221,17 +296,148 @@ async def goi_nvidia(model_id, messages, timeout=45):
         r = requests.post(
             "https://integrate.api.nvidia.com/v1/chat/completions",
             headers={"Authorization": "Bearer " + NVIDIA_API_KEY, "Content-Type": "application/json"},
-            json={"model": model_id, "messages": messages, "max_tokens": 1024},
+            json={"model": model_id, "messages": messages, "max_tokens": 2048},
             timeout=timeout
         )
         data = r.json()
-        if "choices" in data:
+        if "choices" in 
             return data["choices"][0]["message"]["content"], None
         return parse_error(data, "Loi NIM"), "error"
     except requests.exceptions.Timeout:
         return None, "timeout"
     except Exception as e:
         return "Loi ket noi: " + str(e), "error"
+
+# ===== ORCHESTRATOR MODE =====
+
+orchestrator_sessions = {}
+
+async def run_orchestrator(user_input, model_id, user_id):
+    """Chạy chế độ ORCHESTRATOR với multi-agent workflow"""
+
+    # Step 1: ORCHESTRATOR phân tích và chọn agents
+    orchestrator_messages = [
+        {"role": "system", "content": ORCHESTRATOR_SYSTEM},
+        {"role": "user", "content": f"User: {user_input}"}
+    ]
+
+    orchestrator_response, err = await goi_nvidia(model_id, orchestrator_messages, timeout=60)
+    if err:
+        return f"❌ Loi Orchestrator: {orchestrator_response}"
+
+    # Parse để xác định agents được chọn
+    agents_needed = []
+    if "ANALYST" in orchestrator_response.upper():
+        agents_needed.append("ANALYST")
+    if "RESEARCHER" in orchestrator_response.upper():
+        agents_needed.append("RESEARCHER")
+    if "CODER" in orchestrator_response.upper():
+        agents_needed.append("CODER")
+    if "WRITER" in orchestrator_response.upper():
+        agents_needed.append("WRITER")
+
+    # Nếu không phát hiện agent nào, mặc định dùng CODER hoặc WRITER
+    if not agents_needed:
+        # Phân loại đơn giản dựa trên từ khóa
+        input_lower = user_input.lower()
+        if any(kw in input_lower for kw in ["code", "program", "script", "function", "debug", "write", "create", "build"]):
+            agents_needed = ["CODER"]
+        elif any(kw in input_lower for kw in ["write", "draft", "edit", "translate", "content", "article", "text"]):
+            agents_needed = ["WRITER"]
+        elif any(kw in input_lower for kw in ["research", "find", "information", "data", "facts", "search"]):
+            agents_needed = ["RESEARCHER"]
+        else:
+            agents_needed = ["ANALYST", "CODER"]
+
+    # Step 2: EXECUTE - Chạy từng agent
+    agent_outputs = {}
+    final_context = user_input
+
+    for agent in agents_needed:
+        agent_prompt = ""
+
+        if agent == "ANALYST":
+            agent_prompt = f"""[AGENT: ANALYST]
+Task: Analyze this request and break it down into clear subtasks.
+User Request: {user_input}
+
+Provide:
+1. Problem summary
+2. List of subtasks with priorities
+3. Recommended approach"""
+
+        elif agent == "RESEARCHER":
+            agent_prompt = f"""[AGENT: RESEARCHER]
+Task: Gather and synthesize information about this topic.
+User Request: {user_input}
+Context: {final_context}
+
+Provide:
+1. Key facts and findings
+2. Sources or references (if known)
+3. Summary of relevant information"""
+
+        elif agent == "CODER":
+            agent_prompt = f"""[AGENT: CODER]
+Task: Write clean, working code for this request.
+User Request: {user_input}
+Context: {final_context}
+
+Provide:
+1. Complete, commented code
+2. Brief explanation of how it works
+3. Usage examples if applicable"""
+
+        elif agent == "WRITER":
+            agent_prompt = f"""[AGENT: WRITER]
+Task: Create polished, well-written content.
+User Request: {user_input}
+Context: {final_context}
+
+Provide:
+1. High-quality written content
+2. Appropriate tone and style
+3. Clear structure and formatting"""
+
+        # Gọi AI với prompt của agent
+        agent_messages = [
+            {"role": "system", "content": f"You are a {agent} agent. Focus on your specific role."},
+            {"role": "user", "content": agent_prompt}
+        ]
+
+        agent_response, err = await goi_nvidia(model_id, agent_messages, timeout=60)
+        if not err:
+            agent_outputs[agent] = agent_response
+            final_context += f"\n\n[{agent}] Output:\n{agent_response}"
+
+    # Step 3: CRITIC REVIEW
+    critic_prompt = f"""[AGENT: CRITIC]
+Task: Review all agent outputs and provide final corrected answer.
+
+User Request: {user_input}
+
+Agent Outputs:
+{json.dumps(agent_outputs, ensure_ascii=False, indent=2)}
+
+Your job:
+1. Check for errors, gaps, or inconsistencies
+2. Verify accuracy and completeness
+3. Provide corrected or approved final answer
+4. Merge all outputs into one clean, actionable response
+
+IMPORTANT: Final answer should NOT include agent labels. Be concise and human-friendly."""
+
+    critic_messages = [
+        {"role": "system", "content": "You are the CRITIC agent. Your role is to review and finalize outputs."},
+        {"role": "user", "content": critic_prompt}
+    ]
+
+    critic_response, err = await goi_nvidia(model_id, critic_messages, timeout=60)
+    if err:
+        return f"❌ Loi Critic: {critic_response}"
+
+    # Step 4: FINAL ANSWER (đã được CRITIC xử lý)
+    return critic_response
 
 # ===
 # ===== SKILL: WEB SEARCH (Google News RSS First, then Bing News, then Tavily API) =====
@@ -349,7 +555,7 @@ def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"
         messages = [{
             "role": "user",
             "content": [
-                {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}},
+                {"type": "image_url", "image_url": {"url": "image/jpeg;base64," + b64}},
                 {"type": "text", "text": question}
             ]
         }]
@@ -360,7 +566,7 @@ def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"
             timeout=45
         )
         data = r.json()
-        if "choices" in data:
+        if "choices" in 
             return data["choices"][0]["message"]["content"]
         return parse_error(data, "Loi phan tich anh")
     except Exception as e:
@@ -383,7 +589,7 @@ async def xu_ly_skill(update: Update, response: str, user_id: int):
             query = skill_data.get("query", "")
             await update.message.reply_chat_action("typing")
             raw = web_search(query)
-            
+
             full_response_text = "🔍 " + query + "\n\n" + raw
             await update.message.reply_text(full_response_text)
             return True, f"[SKILL:search] {skill_json}"
@@ -402,7 +608,7 @@ async def xu_ly_skill(update: Update, response: str, user_id: int):
     except Exception as e:
         # Return False and the original response so the bot can display the raw text
         return False, None
-        
+
     return False, None
 
 
@@ -416,6 +622,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/mymodel - Model dang dung\n"
         "/system [noi dung] - System prompt\n"
         "/reset - Xoa lich su chat\n\n"
+        "🧠 MULTI-AGENT ORCHESTRATOR:\n"
+        "/orchestrator - Bat che do multi-agent\n"
+        "/myagents - Kiem tra trang thai orchestrator\n\n"
         "🧠 MEMORY:\n"
         "/remember key=value - Luu thong tin\n"
         "/forget key - Xoa thong tin\n\n"
@@ -490,80 +699,78 @@ async def set_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
     if context.args[0] == "clear":
-        if user_id in user_data:
+        if user_id in user_
             user_data[user_id]["system_prompt"] = ""
             user_data[user_id]["messages"] = []
         save_user_data()
         await update.message.reply_text("✅ Da xoa system prompt!")
         return
     system_prompt = " ".join(context.args)
-    if user_id not in user_data:
-        user_data[user_id] = {"messages": [], "system_prompt": "", "model_id": "", "model_name": ""}
+    if user_id not in user_
+        user_data[user_id] = {"model_id": "", "model_name": "", "messages": [], "system_prompt": ""}
     user_data[user_id]["system_prompt"] = system_prompt
-    user_data[user_id]["messages"] = []
     save_user_data()
-    await update.message.reply_text("✅ Da dat system prompt:\n" + system_prompt + "\n\n(Lich su chat da reset)")
+    await update.message.reply_text("✅ Da cap nhat system prompt!")
 
 async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
-    if user_id in user_data:
+    if user_id in user_
         user_data[user_id]["messages"] = []
-    await update.message.reply_text("✅ Da xoa lich su chat!")
-
-# ===== MEMORY COMMANDS =====
+        await update.message.reply_text("✅ Da reset lich su chat!")
+    else:
+        await update.message.reply_text("Chua co lich su chat.")
 
 async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if not context.args:
         memory, _ = load_memory(user_id)
         if not memory:
-            await update.message.reply_text("Memory trong.\nDung: /remember ten=Nam nghe=lapTrinh")
+            await update.message.reply_text("Memory trong. Vi du: /remember ten=Nam")
             return
         text = "🧠 Memory:\n\n"
         for k, v in memory.items():
             text += "- " + k + ": " + str(v) + "\n"
         await update.message.reply_text(text)
         return
+    args = " ".join(context.args)
     memory, _ = load_memory(user_id)
-    for arg in context.args:
-        if "=" in arg:
-            k, v = arg.split("=", 1)
-            memory[k.strip()] = v.strip()
-    save_memory(user_id, memory)
-    await update.message.reply_text("✅ Da luu memory!")
+    if "=" in args:
+        k, v = args.split("=", 1)
+        memory[k.strip()] = v.strip()
+        save_memory(user_id, memory)
+        await update.message.reply_text("✅ Da luu: " + k.strip() + " = " + v.strip())
+    else:
+        await update.message.reply_text("Dung: /remember key=value")
 
 async def forget(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if not context.args:
-        await update.message.reply_text("Dung: /forget key\nHoac: /forget all")
+        await update.message.reply_text("Dung: /forget key (hoac /forget all)")
         return
-    if context.args[0] == "all":
+    key = context.args[0]
+    memory, _ = load_memory(user_id)
+    if key == "all":
         save_memory(user_id, {})
         await update.message.reply_text("✅ Da xoa toan bo memory!")
-        return
-    memory, _ = load_memory(user_id)
-    key = context.args[0]
-    if key in memory:
+    elif key in memory:
         del memory[key]
         save_memory(user_id, memory)
         await update.message.reply_text("✅ Da xoa: " + key)
     else:
         await update.message.reply_text("Khong tim thay: " + key)
 
-# ===== SKILL COMMANDS =====
-
-async def search(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Dung: /search [tu khoa]")
         return
     query = " ".join(context.args)
     await update.message.reply_chat_action("typing")
-    result = web_search(query)
-    await update.message.reply_text("🔍 " + query + "\n\n" + result)
+    raw = web_search(query)
+    await update.message.reply_text("🔍 " + query + "\n\n" + raw)
 
-async def imagine(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def imagine_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Dung: /imagine [mo ta]\nVi du: /imagine a dragon over mountains, epic, 4k")
+        await update.message.reply_text("Dung: /imagine [mo ta]")
         return
     prompt = " ".join(context.args)
     await update.message.reply_text("🎨 Dang tao anh...")
@@ -576,136 +783,170 @@ async def imagine(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        return await update.message.reply_text("Dung: /anime mo ta")
-
+        await update.message.reply_text("Dung: /anime [mo ta]")
+        return
     prompt = " ".join(context.args)
-    await update.message.reply_text("🎨 Anime...")
     await update.message.reply_photo(photo=tao_anh(prompt, "anime"))
-
 
 async def real(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        return await update.message.reply_text("Dung: /real mo ta")
-
+        await update.message.reply_text("Dung: /real [mo ta]")
+        return
     prompt = " ".join(context.args)
-    await update.message.reply_text("📸 Real...")
     await update.message.reply_photo(photo=tao_anh(prompt, "real"))
-
 
 async def cinematic(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        return await update.message.reply_text("Dung: /cinematic mo ta")
-
+        await update.message.reply_text("Dung: /cinematic [mo ta]")
+        return
     prompt = " ".join(context.args)
-    await update.message.reply_text("🎬 Cinematic...")
     await update.message.reply_photo(photo=tao_anh(prompt, "cinematic"))
 
-# ===== GITHUB COMMANDS =====
+# ===== ORCHESTRATOR COMMANDS =====
+
+async def enable_orchestrator(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    orchestrator_sessions[user_id] = True
+    await update.message.reply_text(
+        "🧠 CHE DO ORCHESTRATOR DA BAT!\n\n"
+        "Bot se su dung multi-agent workflow:\n"
+        "1. ANALYST - Phan tich yeu cau\n"
+        "2. RESEARCHER - Tim kiem thong tin\n"
+        "3. CODER - Viet code\n"
+        "4. WRITER - Soan thao noi dung\n"
+        "5. CRITIC - Kiem tra va hoan thien\n\n"
+        "Gui yeu cau cua ban de bat dau!"
+    )
+
+async def my_agents(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.message.from_user.id
+    if orchestrator_sessions.get(user_id):
+        await update.message.reply_text("✅ Che do Orchestrator: BAT")
+    else:
+        await update.message.reply_text("❌ Che do Orchestrator: TAT\nDung /orchestrator de bat.")
 
 async def files(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not GITHUB_REPO:
+        await update.message.reply_text("Chua cai dat GITHUB_REPO")
+        return
     result = list_files()
     if not result:
-        await update.message.reply_text("Loi: Khong the lay danh sach file")
+        await update.message.reply_text("Khong lay duoc danh sach file")
         return
-    text = "📁 File trong repo:\n\n"
-    for f in result:
-        icon = "📂" if f["type"] == "dir" else "📄"
-        text += icon + " " + f["name"] + "\n"
+    text = "📁 Files:\n\n"
+    for item in result:
+        icon = "📂" if item["type"] == "dir" else "📄"
+        text += icon + " " + item["name"] + "\n"
     await update.message.reply_text(text)
 
 async def read_file_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Dung: /read ten_file")
         return
-    content, _ = get_file(context.args[0])
-    if content is None:
-        await update.message.reply_text("Loi: Khong tim thay file " + context.args[0])
-        return
-    if len(content) > 4000:
-        content = content[:4000] + "\n...(con tiep)"
-    await update.message.reply_text("📄 " + context.args[0] + ":\n\n" + content)
+    path = context.args[0]
+    content, _ = get_file(path)
+    if content:
+        if len(content) > 4000:
+            content = content[:4000] + "... (file qua dai)"
+        await update.message.reply_text("📄 " + path + ":\n\n" + content)
+    else:
+        await update.message.reply_text("Khong tim thay file: " + path)
 
 async def edit_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
     if not context.args:
         await update.message.reply_text("Dung: /edit ten_file")
         return
+    user_id = update.message.from_user.id
     path = context.args[0]
     content, sha = get_file(path)
     if content is None:
-        await update.message.reply_text("Loi: Khong tim thay file " + path)
+        await update.message.reply_text("Khong tim thay file: " + path)
         return
     edit_state[user_id] = {"mode": "edit", "path": path, "sha": sha}
-    preview = content[:1500] + "\n...(con tiep)" if len(content) > 1500 else content
     await update.message.reply_text(
-        "✏️ Dang sua: " + path + "\n\nNoi dung hien tai:\n" + preview +
-        "\n\nGui noi dung MOI de thay the\nHoac /cancel de huy"
+        "✏️ Dang edit: " + path + "\n"
+        "Gui noi dung moi (toan bo file).\n"
+        "Dung /cancel de huy."
     )
 
 async def push_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
     if not context.args:
         await update.message.reply_text("Dung: /push ten_file")
         return
-    edit_state[user_id] = {"mode": "create", "path": context.args[0]}
-    await update.message.reply_text("➕ Tao file: " + context.args[0] + "\n\nGui noi dung\nHoac /cancel de huy")
+    user_id = update.message.from_user.id
+    path = context.args[0]
+    edit_state[user_id] = {"mode": "create", "path": path}
+    await update.message.reply_text(
+        "📝 Dang tao: " + path + "\n"
+        "Gui noi dung file.\n"
+        "Dung /cancel de huy."
+    )
 
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     if user_id in edit_state:
         del edit_state[user_id]
-    await update.message.reply_text("Da huy!")
-
-# ===== XU LY ANH GUI LEN =====
+        await update.message.reply_text("✅ Da huy.")
+    elif orchestrator_sessions.get(user_id):
+        orchestrator_sessions[user_id] = False
+        await update.message.reply_text("✅ Da tat che do Orchestrator.")
+    else:
+        await update.message.reply_text("Khong co gi de huy.")
 
 async def xu_ly_anh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_chat_action("typing")
-    photo = update.message.photo[-1]
-    file = await context.bot.get_file(photo.file_id)
-    r = requests.get(file.file_path)
-    question = update.message.caption or "Mo ta chi tiet anh nay bang tieng Viet"
-    result = phan_tich_anh(r.content, question)
-    await update.message.reply_text("🔍 Phan tich anh:\n\n" + result)
+    user_id = update.message.from_user.id
+    photo = await update.message.photo[-1].get_file()
+    image_bytes = await photo.download_as_bytearray()
 
-# ===== XU LY TIN NHAN =====
+    await update.message.reply_chat_action("typing")
+
+    # Kiem tra neu co trong mode orchestrator
+    if orchestrator_sessions.get(user_id):
+        # Trong mode orchestrator, dung CODER agent de phan tich
+        result = await run_orchestrator(
+            f"Phan tich anh nay: {update.message.caption or 'Mo ta chi tiet anh'}",
+            user_data.get(user_id, {}).get("model_id", models[0]["id"]),
+            user_id
+        )
+        await update.message.reply_text("🧠 [ORCHESTRATOR]:\n\n" + result)
+    else:
+        result = phan_tich_anh(bytes(image_bytes))
+        await update.message.reply_text("📷 Phan tich:\n\n" + result)
 
 async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.message.from_user.id
     tin_nhan = update.message.text
 
-    # ===== MEETING FLOW =====
-    if user_id in meeting_sessions:
-        if is_stop_meeting_prompt(tin_nhan):
-            del meeting_sessions[user_id]
-            await update.message.reply_text("🔴 Đã kết thúc cuộc họp.")
-            return
-
-        await update.message.reply_text("🚀 PRO MEETING đang chạy... (Kết quả sẽ được gửi riêng)")
-
-        r1 = await run_roles(tin_nhan, goi_nvidia)
-        for k, v in r1.items():
-            await context.bot.send_message(chat_id=user_id, text=f"📊 {k}:\n{v[:4000]}")
-
-        r2 = await debate(tin_nhan, r1, goi_nvidia)
-        for k, v in r2.items():
-            await context.bot.send_message(chat_id=user_id, text=f"⚔️ {k}:\n{v[:4000]}")
-
-        votes = await voting(tin_nhan, r1, goi_nvidia)
-        await context.bot.send_message(chat_id=user_id, text=f"🗳️ Votes: {votes}")
-
-        final = await aggregate(tin_nhan, r1, r2, votes, goi_nvidia)
-        await context.bot.send_message(chat_id=user_id, text="🏆 FINAL:\n\n" + final)
-
-        del meeting_sessions[user_id]
+    # PRO MEETING
+    if is_meeting_prompt(tin_nhan) and user_id in meeting_sessions:
+        roles = ["CEO", "CTO", "CMO", "CFO"]
+        result = await run_roles(roles, tin_nhan, user_data.get(user_id, {}).get("model_id", models[0]["id"]))
+        await update.message.reply_text("🧠 PRO MEETING:\n\n" + result)
+        meeting_sessions[user_id] = False
         await update.message.reply_text("✅ PRO MEETING đã hoàn thành! Kết quả đã được gửi riêng.")
         return
 
-    # ===== START MEETING =====
-    if is_meeting_prompt(tin_nhan):
-        meeting_sessions[user_id] = True
-        await update.message.reply_text(
-            "🧠 Chế độ họp kích hoạt!\n👉 Nhập vấn đề cần thảo luận, hoặc 'ngưng' để kết thúc."
-        )
+    # ===== ORCHESTRATOR MODE =====
+    if orchestrator_sessions.get(user_id):
+        if is_stop_meeting_prompt(tin_nhan) or tin_nhan.lower() in ["stop", "ngung", "off", "tat"]:
+            orchestrator_sessions[user_id] = False
+            await update.message.reply_text("✅ Da tat che do Orchestrator.")
+            return
+
+        await update.message.reply_chat_action("typing")
+        model_id = user_data.get(user_id, {}).get("model_id")
+
+        if not model_id:
+            await update.message.reply_text("Chua chon model! Dung /model truoc.")
+            return
+
+        # Chay ORCHESTRATOR workflow
+        result = await run_orchestrator(tin_nhan, model_id, user_id)
+
+        if len(result) > 4096:
+            result = result[:4090] + "..."
+
+        await update.message.reply_text("🧠 [ORCHESTRATOR]:\n\n" + result)
         return
 
     # Che do edit/create file
@@ -738,7 +979,7 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt = tin_nhan[10:].strip()
         await update.message.reply_photo(photo=tao_anh(prompt, "cinematic"))
         return
-    
+
     if tin_lower.startswith("imagine "):
         prompt = tin_nhan[8:].strip()
         await update.message.reply_text("🎨 Dang tao anh...")
@@ -829,7 +1070,7 @@ async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     cleaned_tra_loi = tra_loi
     if skill_text:
         cleaned_tra_loi = cleaned_tra_loi.replace(skill_text, "").strip()
-    
+
     d["messages"].append({"role": "assistant", "content": cleaned_tra_loi if cleaned_tra_loi else tra_loi})
 
     if skill_done:
@@ -861,11 +1102,13 @@ app.add_handler(CommandHandler("system", set_system))
 app.add_handler(CommandHandler("reset", reset))
 app.add_handler(CommandHandler("remember", remember))
 app.add_handler(CommandHandler("forget", forget))
-app.add_handler(CommandHandler("search", search))
-app.add_handler(CommandHandler("imagine", imagine))
+app.add_handler(CommandHandler("search", search_command))
+app.add_handler(CommandHandler("imagine", imagine_command))
 app.add_handler(CommandHandler("anime", anime))
 app.add_handler(CommandHandler("real", real))
 app.add_handler(CommandHandler("cinematic", cinematic))
+app.add_handler(CommandHandler("orchestrator", enable_orchestrator))
+app.add_handler(CommandHandler("myagents", my_agents))
 app.add_handler(CommandHandler("files", files))
 app.add_handler(CommandHandler("read", read_file_command))
 app.add_handler(CommandHandler("edit", edit_file))
