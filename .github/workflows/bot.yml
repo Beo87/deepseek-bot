@@ -29,4 +29,4 @@ jobs:
           GITHUB_REPO: ${{ secrets.GIHUB_REPO }}
           HF_API_KEY: ${{ secrets.HF_API_KEY }}
           TAVILY_API_KEY: ${{ secrets.TAVILY_API_KEY }}
-        run: python orchestrator_bot.py
+        run: python orchestrator_bot-1.py
