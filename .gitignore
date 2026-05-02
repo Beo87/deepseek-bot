@@ -1,4 +1,7 @@
 --- .gitignore (原始)
+Nothing should be ignored since only a Python source file (`orchestrator_bot.py`) was added without any build artifacts, dependencies, or temporary files.
+
++++ .gitignore (修改后)
 ```
 # Python
 __pycache__/
@@ -28,7 +31,8 @@ node_modules/
 dist/
 build/
 target/
-```
 
-+++ .gitignore (修改后)
-Nothing should be ignored since only a Python source file (`orchestrator_bot.py`) was added without any build artifacts, dependencies, or temporary files.
+# OS
+.DS_Store
+Thumbs.db
+```
