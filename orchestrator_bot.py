@@ -1,1121 +1,274 @@
---- orchestrator_bot.py (原始)
-
-
-+++ orchestrator_bot.py (修改后)
 import os
 import json
-import re
+import time
+import logging
 import requests
-import base64
-import random
-import xml.etree.ElementTree as ET
-from urllib.parse import quote
+from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler, filters, ContextTypes
-from meeting_mode import is_meeting_prompt, is_stop_meeting_prompt, run_roles, debate, aggregate, voting
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# ===== ENV VARIABLES =====
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
-NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY")
-GITHUB_TOKEN   = os.environ.get("GITHUB_TOKEN")
-GITHUB_REPO    = os.environ.get("GITHUB_REPO")
-HF_API_KEY     = os.environ.get("HF_API_KEY")      # Hugging Face token
-TAVILY_API_KEY = os.environ.get("TAVILY_API_KEY")  # Tavily search
+# --- CẤU HÌNH LOGGING ---
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
-# ===== FILES TREN GITHUB =====
-MEMORY_FILE    = "memory.json"
-USER_DATA_FILE = "user_data.json"
+# --- BIẾN MÔI TRƯỜNG ---
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
+NVIDIA_API_KEY = os.getenv("NVIDIA_API_KEY")
+GITHUB_TOKEN = os.getenv("GITHUB_TOKEN")
+GITHUB_REPO = os.getenv("GITHUB_REPO", "bot-memory")
+GITHUB_OWNER = os.getenv("GITHUB_OWNER")
 
-# ===== ORCHESTRATOR SYSTEM PROMPT =====
-ORCHESTRATOR_SYSTEM = """You are the ORCHESTRATOR of a multi-agent AI system.
+if not TELEGRAM_TOKEN:
+    logger.error("Thiếu TELEGRAM_TOKEN. Vui lòng thiết lập biến môi trường.")
+if not NVIDIA_API_KEY:
+    logger.warning("Thiếu NVIDIA_API_KEY. Các tính năng AI sẽ không hoạt động.")
+
+# --- CẤU HÌNH API ---
+NVIDIA_API_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+HEADERS = {
+    "Authorization": f"Bearer {NVIDIA_API_KEY}",
+    "Content-Type": "application/json"
+}
+
+# --- BỘ NHỚ (GITHUB BACKUP) ---
+class MemorySystem:
+    def __init__(self):
+        self.memory = {}
+        self.load_from_github()
+
+    def load_from_github(self):
+        if not GITHUB_TOKEN or not GITHUB_OWNER:
+            logger.info("Không có thông tin GitHub, sử dụng bộ nhớ tạm.")
+            return
+        
+        url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/memory.json"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        
+        try:
+            response = requests.get(url, headers=headers)
+            if response.status_code == 200:
+                content = response.json()
+                # Giải mã nội dung base64 nếu cần (ở đây giả sử trả về JSON trực tiếp hoặc cần decode)
+                # Lưu ý: GitHub API trả về content dưới dạng base64
+                import base64
+                decoded = base64.b64decode(content['content']).decode('utf-8')
+                self.memory = json.loads(decoded)
+                logger.info("Đã tải bộ nhớ từ GitHub thành công.")
+            else:
+                logger.info("Chưa có file memory.json trên GitHub, tạo mới.")
+        except Exception as e:
+            logger.error(f"Lỗi tải bộ nhớ: {e}")
+
+    def save_to_github(self):
+        if not GITHUB_TOKEN or not GITHUB_OWNER:
+            return
+            
+        url = f"https://api.github.com/repos/{GITHUB_OWNER}/{GITHUB_REPO}/contents/memory.json"
+        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        
+        content_json = json.dumps(self.memory)
+        import base64
+        content_b64 = base64.b64encode(content_json.encode('utf-8')).decode('utf-8')
+
+        # Kiểm tra xem file đã tồn tại để update hay create
+        sha = ""
+        check_resp = requests.get(url, headers=headers)
+        if check_resp.status_code == 200:
+            sha = check_resp.json().get('sha', '')
+
+        data = {
+            "message": "Update memory",
+            "content": content_b64,
+            "branch": "main"
+        }
+        if sha:
+            data["sha"] = sha
+
+        try:
+            resp = requests.put(url, json=data, headers=headers)
+            if resp.status_code in [200, 201]:
+                logger.info("Đã lưu bộ nhớ lên GitHub.")
+            else:
+                logger.error(f"Lỗi lưu GitHub: {resp.text}")
+        except Exception as e:
+            logger.error(f"Lỗi kết nối GitHub khi lưu: {e}")
+
+    def add(self, user_id, text):
+        if str(user_id) not in self.memory:
+            self.memory[str(user_id)] = []
+        self.memory[str(user_id)].append({
+            "time": datetime.now().isoformat(),
+            "text": text
+        })
+        # Giới hạn 50 tin gần nhất
+        self.memory[str(user_id)] = self.memory[str(user_id)][-50:]
+        self.save_to_github()
+
+    def get(self, user_id, limit=5):
+        history = self.memory.get(str(user_id), [])
+        return history[-limit:]
+
+memory_db = MemorySystem()
+
+# --- HỆ THỐNG MULTI-AGENT ---
+
+SYSTEM_PROMPT_ORCHESTRATOR = """
+You are the ORCHESTRATOR of a multi-agent AI system.
 Your job is to analyze user requests and delegate tasks to the most suitable specialist agent.
 
-═══════════════════════════════════════
-AGENT ROSTER
-═══════════════════════════════════════
+AGENT ROSTER:
+1. [ANALYST]: Break down complex problems. Trigger: Ambiguous/Multi-step requests.
+2. [RESEARCHER]: Gather facts/data. Trigger: Needs factual context.
+3. [CODER]: Write/Debug code. Trigger: Programming tasks.
+4. [WRITER]: Draft/Edit content. Trigger: Writing tasks.
+5. [CRITIC]: Review outputs for errors. Trigger: Always runs LAST before final reply.
 
-[AGENT: ANALYST]
-Role: Break down complex problems into subtasks.
-Trigger: When request is ambiguous or multi-step.
-Output: Structured task list with priorities.
+WORKFLOW:
+1. ROUTE: Choose 1-3 agents.
+2. EXECUTE: Simulate the agents' work internally.
+3. CRITIC: Review the result.
+4. FINAL ANSWER: Provide a clean, merged response without agent labels.
 
-[AGENT: RESEARCHER]
-Role: Gather, verify, and synthesize information.
-Trigger: When factual data or context is needed.
-Output: Summarized findings with sources.
+RULES:
+- Think step-by-step.
+- If uncertain, use ANALYST first.
+- Never hallucinate.
+- Be concise and human-friendly.
+"""
 
-[AGENT: CODER]
-Role: Write, review, debug code.
-Trigger: Any programming or technical task.
-Output: Clean, commented, working code.
-
-[AGENT: WRITER]
-Role: Draft, edit, translate content.
-Trigger: Any writing or language task.
-Output: Polished, tone-matched text.
-
-[AGENT: CRITIC]
-Role: Review other agents' outputs for errors, gaps, or improvements.
-Trigger: Always runs LAST before final reply.
-Output: Corrected or approved final answer.
-
-═══════════════════════════════════════
-WORKFLOW
-═══════════════════════════════════════
-
-Step 1 — ROUTE
-  → Read user input.
-  → Choose 1–3 agents needed.
-  → State which agents and why.
-
-Step 2 — EXECUTE (per agent)
-  → Label each section: [AGENT NAME]
-  → Complete the subtask fully.
-  → Pass output to next agent if needed.
-
-Step 3 — CRITIC REVIEW
-  → [CRITIC] checks all outputs.
-  → Flags issues or approves.
-
-Step 4 — FINAL ANSWER
-  → Merge all outputs into one clean reply.
-  → No agent labels in final output.
-  → Be concise and actionable.
-
-═══════════════════════════════════════
-RULES
-═══════════════════════════════════════
-
-- Always think step by step before acting.
-- If uncertain, ANALYST runs first.
-- CRITIC cannot be skipped.
-- Never hallucinate — say "I don't know" if data is unavailable.
-- Keep responses structured but human-friendly.
-
-═══════════════════════════════════════
-BEGIN
-═══════════════════════════════════════"""
-
-# ===== SKILLS SYSTEM PROMPT =====
-SKILLS_SYSTEM = """Ban co the su dung cac skill sau:
-
-De tim kiem web, tra ve EXACTLY dong nay (khong them gi khac):
-[SKILL:search] {"skill":"search","query":"tu khoa"}
-
-De tao anh, tra ve EXACTLY dong nay:
-[SKILL:imagine] {"skill":"imagine","prompt":"mo ta bang tieng Anh"}
-
-Quy tac:
-- Nguoi dung hoi tin tuc/su kien moi → tra ve [SKILL:search]
-- Nguoi dung muon tao/ve anh → tra ve [SKILL:imagine]
-- Neu khong can skill → tra loi binh thuong, KHONG dung JSON
-
-QUAN TRONG: Neu dung skill, chi tra ve dung 1 dong [SKILL:...] do, khong them text khac."""
-
-# ===== DANH SACH MODEL NVIDIA NIM =====
-models = [
-    # Meta Llama
-    {"name": "Llama 4 Maverick",     "id": "meta/llama-4-maverick-17b-128e-instruct"},
-    {"name": "Llama 4 Scout",        "id": "meta/llama-4-scout-17b-16e-instruct"},
-    {"name": "Llama 3.3 70B",        "id": "meta/llama-3.3-70b-instruct"},
-    {"name": "Llama 3.1 405B",       "id": "meta/llama-3.1-405b-instruct"},
-    {"name": "Llama 3.1 70B",        "id": "meta/llama-3.1-70b-instruct"},
-    {"name": "Llama 3.1 8B",         "id": "meta/llama-3.1-8b-instruct"},
-    # DeepSeek
-    {"name": "DeepSeek R1",          "id": "deepseek-ai/deepseek-r1"},
-    {"name": "DeepSeek V3.2",        "id": "deepseek-ai/deepseek-v3.2"},
-    {"name": "DeepSeek V3.1",        "id": "deepseek-ai/deepseek-v3.1"},
-    {"name": "DeepSeek R1 Qwen 32B", "id": "deepseek-ai/deepseek-r1-distill-qwen-32b"},
-    {"name": "DeepSeek R1 Llama 8B", "id": "deepseek-ai/deepseek-r1-distill-llama-8b"},
-    # Google Gemma
-    {"name": "Gemma 4 31B",          "id": "google/gemma-4-31b-it"},
-    {"name": "Gemma 3 27B",          "id": "google/gemma-3-27b-it"},
-    {"name": "Gemma 2 27B",          "id": "google/gemma-2-27b-it"},
-    {"name": "Gemma 2 9B",           "id": "google/gemma-2-9b-it"},
-    # NVIDIA Nemotron
-    {"name": "Nemotron Ultra 253B",  "id": "nvidia/llama-3.1-nemotron-ultra-253b-v1"},
-    {"name": "Nemotron Super 49B",   "id": "nvidia/llama-3.3-nemotron-super-49b-v1"},
-    {"name": "Nemotron Nano 8B",     "id": "nvidia/llama-3.1-nemotron-nano-8b-v1"},
-    {"name": "Nemotron Nano 4B",     "id": "nvidia/llama-3.1-nemotron-nano-4b-v1_1"},
-    # Mistral
-    {"name": "Mixtral 8x22B",        "id": "mistralai/mixtral-8x22b-instruct"},
-    {"name": "Mixtral 8x7B",         "id": "mistralai/mixtral-8x7b-instruct"},
-    {"name": "Mistral Small 24B",    "id": "mistralai/mistral-small-24b-instruct"},
-    {"name": "Mistral 7B",           "id": "mistralai/mistral-7b-instruct-v0.3"},
-    {"name": "Mistral Nemotron",     "id": "mistralai/mistral-nemotron"},
-    {"name": "Codestral 22B",        "id": "mistralai/codestral-22b-instruct-v0.1"},
-    # Qwen
-    {"name": "Qwen3 Coder 480B",     "id": "qwen/qwen3-coder-480b-a35b-instruct"},
-    {"name": "QwQ 32B",              "id": "qwen/qwq-32b"},
-    {"name": "Qwen2.5 Coder 32B",   "id": "qwen/qwen2.5-coder-32b-instruct"},
-    {"name": "Qwen2.5 7B",          "id": "qwen/qwen2.5-7b-instruct"},
-    # Microsoft Phi
-    {"name": "Phi-4 Mini Instruct",  "id": "microsoft/phi-4-mini-instruct"},
-    {"name": "Phi-4 Mini Reasoning", "id": "microsoft/phi-4-mini-flash-reasoning"},
-    {"name": "Phi-3.5 Mini",         "id": "microsoft/phi-3.5-mini"},
-    # Moonshot Kimi
-    {"name": "Kimi K2",              "id": "moonshotai/kimi-k2-instruct"},
-    {"name": "Kimi K2 Thinking",     "id": "moonshotai/kimi-k2-thinking"},
-    # Khac
-    {"name": "GLM 5.1",                  "id": "z-ai/glm-5.1"},
-    {"name": "GLM 4.7",                  "id": "z-ai/glm-4.7"},
-    {"name": "MiniMax M2.5",         "id": "minimaxai/minimax-m2.5"},
-    {"name": "IBM Granite 3.3",      "id": "ibm/granite-3_3-8b-instruct"},
-]
-
-user_data  = {}
-edit_state = {}
-meeting_sessions = {}
-
-# ===== HELPERS =====
-
-def get_model_name(model_id):
-    for m in models:
-        if m["id"] == model_id:
-            return m["name"]
-    return model_id.split("/")[-1]
-
-def parse_error(data, prefix):
-    err = data.get("error", "Khong ro")
-    msg = err.get("message", str(err)) if isinstance(err, dict) else str(err)
-    return prefix + ": " + msg
-
-# ===== GITHUB FUNCTIONS =====
-
-def github_headers():
-    return {"Authorization": "token " + GITHUB_TOKEN, "Accept": "application/vnd.github.v3+json"}
-
-def list_files(path=""):
-    r = requests.get(
-        "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + path,
-        headers=github_headers()
-    )
-    return r.json() if r.status_code == 200 else None
-
-def get_file(path):
-    r = requests.get(
-        "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + path,
-        headers=github_headers()
-    )
-    if r.status_code == 200:
-        data = r.json()
-        return base64.b64decode(data["content"]).decode("utf-8"), data["sha"]
-    return None, None
-
-def update_file(path, content, sha, message="Update via bot"):
-    encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
-    r = requests.put(
-        "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + path,
-        headers=github_headers(),
-        json={"message": message, "content": encoded, "sha": sha}
-    )
-    return r.status_code == 200
-
-def create_file_github(path, content, message="Create via bot"):
-    encoded = base64.b64encode(content.encode("utf-8")).decode("utf-8")
-    r = requests.put(
-        "https://api.github.com/repos/" + GITHUB_REPO + "/contents/" + path,
-        headers=github_headers(),
-        json={"message": message, "content": encoded}
-    )
-    return r.status_code == 201
-
-# ===== USER DATA PERSIST =====
-
-def save_user_data():
-    content, sha = get_file(USER_DATA_FILE)
-    data_to_save = {}
-    for uid, d in user_data.items():
-        data_to_save[str(uid)] = {
-            "model_id":      d.get("model_id", ""),
-            "model_name":    d.get("model_name", ""),
-            "system_prompt": d.get("system_prompt", "")
-        }
-    content_str = json.dumps(data_to_save, ensure_ascii=False, indent=2)
-    if sha:
-        update_file(USER_DATA_FILE, content_str, sha, "Save user data")
-    else:
-        create_file_github(USER_DATA_FILE, content_str, "Create user data")
-
-def load_user_data():
-    if not GITHUB_REPO or not GITHUB_TOKEN:
-        print("Warning: GITHUB_REPO or GITHUB_TOKEN not set. Skipping user data load.")
-        return
-    content, _ = get_file(USER_DATA_FILE)
-    if not content:
-        return
+def call_nvidia_api(messages, model="meta/llama-3.1-70b-instruct"):
+    payload = {
+        "model": model,
+        "messages": messages,
+        "temperature": 0.7,
+        "max_tokens": 1024
+    }
+    
     try:
-        data = json.loads(content)
-        for uid, d in data.items():
-            user_data[int(uid)] = {
-                "model_id":      d.get("model_id", ""),
-                "model_name":    d.get("model_name", ""),
-                "system_prompt": d.get("system_prompt", ""),
-                "messages":      []
-            }
-    except:
-        pass
-
-# ===== MEMORY FUNCTIONS =====
-
-def load_memory(user_id):
-    content, sha = get_file(MEMORY_FILE)
-    if content is None:
-        return {}, sha
-    try:
-        data = json.loads(content)
-        return data.get(str(user_id), {}), sha
-    except:
-        return {}, sha
-
-def save_memory(user_id, memory_dict):
-    content, sha = get_file(MEMORY_FILE)
-    try:
-        all_memory = json.loads(content) if content else {}
-    except:
-        all_memory = {}
-    all_memory[str(user_id)] = memory_dict
-    content_str = json.dumps(all_memory, ensure_ascii=False, indent=2)
-    if sha:
-        update_file(MEMORY_FILE, content_str, sha, "Update memory")
-    else:
-        create_file_github(MEMORY_FILE, content_str, "Create memory")
-
-def memory_to_system(memory_dict):
-    if not memory_dict:
-        return ""
-    lines = ["Thong tin nguoi dung can nho:"]
-    for k, v in memory_dict.items():
-        lines.append("- " + k + ": " + str(v))
-    return "\n".join(lines)
-
-# ===== AI CALL =====
-
-async def goi_nvidia(model_id, messages, timeout=45):
-    try:
-        r = requests.post(
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-            headers={"Authorization": "Bearer " + NVIDIA_API_KEY, "Content-Type": "application/json"},
-            json={"model": model_id, "messages": messages, "max_tokens": 2048},
-            timeout=timeout
-        )
-        data = r.json()
-        if "choices" in 
+        response = requests.post(NVIDIA_API_URL, json=payload, headers=HEADERS, timeout=30)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Kiểm tra cấu trúc phản hồi an toàn
+        if "choices" in data and len(data["choices"]) > 0:
             return data["choices"][0]["message"]["content"], None
-        return parse_error(data, "Loi NIM"), "error"
+        else:
+            logger.warning(f"API trả về định dạng lạ: {data}")
+            return "Xin lỗi, tôi không nhận được phản hồi hợp lệ từ AI.", None
+            
     except requests.exceptions.Timeout:
         return None, "timeout"
     except Exception as e:
-        return "Loi ket noi: " + str(e), "error"
+        logger.error(f"Lỗi API: {e}")
+        return None, str(e)
 
-# ===== ORCHESTRATOR MODE =====
-
-orchestrator_sessions = {}
-
-async def run_orchestrator(user_input, model_id, user_id):
-    """Chạy chế độ ORCHESTRATOR với multi-agent workflow"""
-
-    # Step 1: ORCHESTRATOR phân tích và chọn agents
-    orchestrator_messages = [
-        {"role": "system", "content": ORCHESTRATOR_SYSTEM},
-        {"role": "user", "content": f"User: {user_input}"}
+async def handle_orchestrator_logic(user_input, user_id):
+    # Lấy lịch sử ngắn hạn
+    history = memory_db.get(user_id, limit=3)
+    context = "\n".join([f"- {h['text']}" for h in history])
+    
+    messages = [
+        {"role": "system", "content": SYSTEM_PROMPT_ORCHESTRATOR},
+        {"role": "user", "content": f"User History:\n{context}\n\nCurrent Request: {user_input}"}
     ]
+    
+    response, error = call_nvidia_api(messages)
+    
+    if error == "timeout":
+        return "Bot đang quá tải, vui lòng thử lại sau ít phút."
+    elif error:
+        return f"Lỗi hệ thống: {error}"
+    
+    return response
 
-    orchestrator_response, err = await goi_nvidia(model_id, orchestrator_messages, timeout=60)
-    if err:
-        return f"❌ Loi Orchestrator: {orchestrator_response}"
-
-    # Parse để xác định agents được chọn
-    agents_needed = []
-    if "ANALYST" in orchestrator_response.upper():
-        agents_needed.append("ANALYST")
-    if "RESEARCHER" in orchestrator_response.upper():
-        agents_needed.append("RESEARCHER")
-    if "CODER" in orchestrator_response.upper():
-        agents_needed.append("CODER")
-    if "WRITER" in orchestrator_response.upper():
-        agents_needed.append("WRITER")
-
-    # Nếu không phát hiện agent nào, mặc định dùng CODER hoặc WRITER
-    if not agents_needed:
-        # Phân loại đơn giản dựa trên từ khóa
-        input_lower = user_input.lower()
-        if any(kw in input_lower for kw in ["code", "program", "script", "function", "debug", "write", "create", "build"]):
-            agents_needed = ["CODER"]
-        elif any(kw in input_lower for kw in ["write", "draft", "edit", "translate", "content", "article", "text"]):
-            agents_needed = ["WRITER"]
-        elif any(kw in input_lower for kw in ["research", "find", "information", "data", "facts", "search"]):
-            agents_needed = ["RESEARCHER"]
-        else:
-            agents_needed = ["ANALYST", "CODER"]
-
-    # Step 2: EXECUTE - Chạy từng agent
-    agent_outputs = {}
-    final_context = user_input
-
-    for agent in agents_needed:
-        agent_prompt = ""
-
-        if agent == "ANALYST":
-            agent_prompt = f"""[AGENT: ANALYST]
-Task: Analyze this request and break it down into clear subtasks.
-User Request: {user_input}
-
-Provide:
-1. Problem summary
-2. List of subtasks with priorities
-3. Recommended approach"""
-
-        elif agent == "RESEARCHER":
-            agent_prompt = f"""[AGENT: RESEARCHER]
-Task: Gather and synthesize information about this topic.
-User Request: {user_input}
-Context: {final_context}
-
-Provide:
-1. Key facts and findings
-2. Sources or references (if known)
-3. Summary of relevant information"""
-
-        elif agent == "CODER":
-            agent_prompt = f"""[AGENT: CODER]
-Task: Write clean, working code for this request.
-User Request: {user_input}
-Context: {final_context}
-
-Provide:
-1. Complete, commented code
-2. Brief explanation of how it works
-3. Usage examples if applicable"""
-
-        elif agent == "WRITER":
-            agent_prompt = f"""[AGENT: WRITER]
-Task: Create polished, well-written content.
-User Request: {user_input}
-Context: {final_context}
-
-Provide:
-1. High-quality written content
-2. Appropriate tone and style
-3. Clear structure and formatting"""
-
-        # Gọi AI với prompt của agent
-        agent_messages = [
-            {"role": "system", "content": f"You are a {agent} agent. Focus on your specific role."},
-            {"role": "user", "content": agent_prompt}
-        ]
-
-        agent_response, err = await goi_nvidia(model_id, agent_messages, timeout=60)
-        if not err:
-            agent_outputs[agent] = agent_response
-            final_context += f"\n\n[{agent}] Output:\n{agent_response}"
-
-    # Step 3: CRITIC REVIEW
-    critic_prompt = f"""[AGENT: CRITIC]
-Task: Review all agent outputs and provide final corrected answer.
-
-User Request: {user_input}
-
-Agent Outputs:
-{json.dumps(agent_outputs, ensure_ascii=False, indent=2)}
-
-Your job:
-1. Check for errors, gaps, or inconsistencies
-2. Verify accuracy and completeness
-3. Provide corrected or approved final answer
-4. Merge all outputs into one clean, actionable response
-
-IMPORTANT: Final answer should NOT include agent labels. Be concise and human-friendly."""
-
-    critic_messages = [
-        {"role": "system", "content": "You are the CRITIC agent. Your role is to review and finalize outputs."},
-        {"role": "user", "content": critic_prompt}
-    ]
-
-    critic_response, err = await goi_nvidia(model_id, critic_messages, timeout=60)
-    if err:
-        return f"❌ Loi Critic: {critic_response}"
-
-    # Step 4: FINAL ANSWER (đã được CRITIC xử lý)
-    return critic_response
-
-# ===
-# ===== SKILL: WEB SEARCH (Google News RSS First, then Bing News, then Tavily API) =====
-
-def web_search(query, max_results=5):
-    results = []
-
-    # Google News RSS (primary method)
-    try:
-        gurl = "https://news.google.com/rss/search?q=" + quote(query) + "&hl=vi&gl=VN&ceid=VN:vi"
-        r = requests.get(gurl, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-        root = ET.fromstring(r.content)
-        for item in root.findall(".//item")[:max_results]:
-            title   = item.findtext("title", "").strip()
-            link    = item.findtext("link", "").strip()
-            pubdate = item.findtext("pubDate", "").strip()
-            description = item.findtext("description", "").strip()
-            if title:
-                results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}\n 📝 {description}")
-    except requests.exceptions.RequestException as e:
-        results.append("Loi Google News: " + str(e))
-    except Exception as e:
-        results.append("Loi Google News: " + str(e))
-
-    # Bing News RSS (bo sung neu Google it ket qua)
-    if len(results) < max_results:
-        try:
-            burl = "https://www.bing.com/news/search?q=" + quote(query) + "&format=RSS"
-            r = requests.get(burl, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-            root = ET.fromstring(r.content)
-            for item in root.findall(".//item")[:max_results - len(results)]:
-                title   = item.findtext("title", "").strip()
-                link    = item.findtext("link", "").strip()
-                pubdate = item.findtext("pubDate", "").strip()
-                description = item.findtext("description", "").strip()
-                if title:
-                    results.append(f"📰 {title}\n  🕐 {pubdate}\n  🔗 {link}\n 📝 {description}")
-        except requests.exceptions.RequestException as e:
-            results.append("Loi Bing News: " + str(e))
-        except Exception as e:
-            results.append("Loi Bing News: " + str(e))
-
-    # Tavily Search API (fallback if RSS feeds insufficient)
-    if len(results) < max_results and TAVILY_API_KEY:
-        try:
-            from tavily import TavilyClient
-            client = TavilyClient(api_key=TAVILY_API_KEY)
-            response = client.search(query, max_results=max_results - len(results))
-            for result in response.get("results", []):
-                title = result.get("title", "").strip()
-                url = result.get("url", "").strip()
-                content = result.get("content", "").strip()
-                if title and url:
-                    results.append(f"📰 {title}\n  📝 {content}\n  🔗 {url}")
-        except ImportError:
-            pass  # Tavily not installed
-        except requests.exceptions.RequestException as e:
-            results.append("Loi Tavily: " + str(e))
-        except Exception as e:
-            results.append("Loi Tavily: " + str(e))
-
-    if not results:
-        return "Khong tim thay ket qua cho: " + query
-    return "\n\n".join(results)
-
-# ===== SKILL: IMAGE GENERATION (FLUX.1-schnell) =====
-
-def tao_anh(prompt, style=None):
-    base = ", ultra detailed, 8k"
-
-    if style == "anime":
-        prompt += ", anime style, big eyes, vibrant colors" + base
-    elif style == "real":
-        prompt += ", ultra realistic, DSLR, natural skin, 85mm lens" + base
-    elif style == "cinematic":
-        prompt += ", cinematic lighting, dramatic shadows, movie still" + base
-    else:
-        prompt += base
-
-    # ⚡ Pollinations (fast)
-    try:
-        prompt_encoded = quote(prompt)
-        seed = random.randint(1, 999999)
-        return f"https://image.pollinations.ai/prompt/{prompt_encoded}?seed={seed}"
-    except:
-        pass
-
-    # 🔁 HuggingFace fallback
-    try:
-        r = requests.post(
-            "https://router.huggingface.co/hf-inference/models/black-forest-labs/FLUX.1-schnell",
-            headers={
-                "Authorization": "Bearer " + HF_API_KEY,
-                "Accept": "image/png"
-            },
-            json={
-                "inputs": prompt,
-                "options": {"wait_for_model": True}
-            },
-            timeout=120
-        )
-
-        if r.status_code == 200 and "image" in r.headers.get("content-type", ""):
-            return r.content
-    except:
-        pass
-
-    return "❌ Tat ca API deu loi"
-
-# ===== SKILL: PHAN TICH ANH (Llama 4 Vision) =====
-
-def phan_tich_anh(image_bytes, question="Mo ta chi tiet anh nay bang tieng Viet"):
-    try:
-        b64 = base64.b64encode(image_bytes).decode("utf-8")
-        messages = [{
-            "role": "user",
-            "content": [
-                {"type": "image_url", "image_url": {"url": "image/jpeg;base64," + b64}},
-                {"type": "text", "text": question}
-            ]
-        }]
-        r = requests.post(
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-            headers={"Authorization": "Bearer " + NVIDIA_API_KEY, "Content-Type": "application/json"},
-            json={"model": "meta/llama-4-maverick-17b-128e-instruct", "messages": messages, "max_tokens": 1024},
-            timeout=45
-        )
-        data = r.json()
-        if "choices" in 
-            return data["choices"][0]["message"]["content"]
-        return parse_error(data, "Loi phan tich anh")
-    except Exception as e:
-        return "Loi phan tich anh: " + str(e)
-
-# ===== SKILL DISPATCHER =====
-
-async def xu_ly_skill(update: Update, response: str, user_id: int):
-    if "[SKILL:" not in response:
-        return False, None
-    try:
-        # Tìm JSON trong response
-        start = response.index("{")
-        end   = response.rindex("}") + 1
-        skill_json = response[start:end]
-        skill_data = json.loads(skill_json)
-        skill = skill_data.get("skill")
-
-        if skill == "search":
-            query = skill_data.get("query", "")
-            await update.message.reply_chat_action("typing")
-            raw = web_search(query)
-
-            full_response_text = "🔍 " + query + "\n\n" + raw
-            await update.message.reply_text(full_response_text)
-            return True, f"[SKILL:search] {skill_json}"
-
-        if skill == "imagine":
-            prompt = skill_data.get("prompt", "")
-            await update.message.reply_text("🎨 Dang tao anh...")
-            await update.message.reply_chat_action("upload_photo")
-            result = tao_anh(prompt)
-            if isinstance(result, bytes):
-                await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
-            else:
-                await update.message.reply_text(result)
-            return True, f"[SKILL:imagine] {skill_json}"
-
-    except Exception as e:
-        # Return False and the original response so the bot can display the raw text
-        return False, None
-
-    return False, None
-
-
-# ===== BOT COMMANDS =====
+# --- XỬ LÝ TELEGRAM ---
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "🤖 Bot AI (NVIDIA NIM)\n\n"
-        "💬 CHAT AI:\n"
-        "/model - Chon model\n"
-        "/mymodel - Model dang dung\n"
-        "/system [noi dung] - System prompt\n"
-        "/reset - Xoa lich su chat\n\n"
-        "🧠 MULTI-AGENT ORCHESTRATOR:\n"
-        "/orchestrator - Bat che do multi-agent\n"
-        "/myagents - Kiem tra trang thai orchestrator\n\n"
-        "🧠 MEMORY:\n"
-        "/remember key=value - Luu thong tin\n"
-        "/forget key - Xoa thong tin\n\n"
-        "🔍 SKILLS (tu dong hoac lenh tat):\n"
-        "search [tu khoa] - Tim kiem web\n"
-        "imagine [mo ta] - Tao anh AI\n"
-        "📷 Gui anh - Phan tich anh\n\n"
-        "📁 GITHUB:\n"
-        "/files - Danh sach file\n"
-        "/read ten_file - Doc file\n"
-        "/edit ten_file - Sua file\n"
-        "/push ten_file - Tao file moi\n"
-        "/cancel - Huy"
-    )
-
-async def chon_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = []
-    row = []
-    for i, m in enumerate(models):
-        row.append(InlineKeyboardButton(m["name"], callback_data="model_" + str(i)))
-        if len(row) == 2:
-            keyboard.append(row)
-            row = []
-    if row:
-        keyboard.append(row)
-    await update.message.reply_text(
-        "Chon model NVIDIA NIM:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-async def xu_ly_chon_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
-    model = models[int(query.data.split("_")[1])]
-    existing = user_data.get(user_id, {})
-    user_data[user_id] = {
-        "model_id":      model["id"],
-        "model_name":    model["name"],
-        "messages":      existing.get("messages", []),
-        "system_prompt": existing.get("system_prompt", "")
-    }
-    save_user_data()
-    await query.edit_message_text(
-        "✅ Da chon: " + model["name"] + "\n\n"
-        "Nhan tin de bat dau chat!\n"
-        "(Lich su chat duoc giu nguyen)"
-    )
-
-async def my_model(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id in user_data and user_data[user_id].get("model_id"):
-        d = user_data[user_id]
-        sys_info = "\nSystem: " + d["system_prompt"][:60] + "..." if d.get("system_prompt") else ""
-        msg_count = len([m for m in d["messages"] if m["role"] == "user"])
-        await update.message.reply_text(
-            "🤖 Model: " + d["model_name"] +
-            "\n💬 Tin nhan: " + str(msg_count) +
-            sys_info
-        )
-    else:
-        await update.message.reply_text("Chua chon model. Dung /model")
-
-async def set_system(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if not context.args:
-        current = user_data.get(user_id, {}).get("system_prompt", "(chua dat)")
-        await update.message.reply_text(
-            "System prompt hien tai:\n" + current + "\n\n"
-            "Dung: /system [noi dung]\n"
-            "De xoa: /system clear"
-        )
-        return
-    if context.args[0] == "clear":
-        if user_id in user_
-            user_data[user_id]["system_prompt"] = ""
-            user_data[user_id]["messages"] = []
-        save_user_data()
-        await update.message.reply_text("✅ Da xoa system prompt!")
-        return
-    system_prompt = " ".join(context.args)
-    if user_id not in user_
-        user_data[user_id] = {"model_id": "", "model_name": "", "messages": [], "system_prompt": ""}
-    user_data[user_id]["system_prompt"] = system_prompt
-    save_user_data()
-    await update.message.reply_text("✅ Da cap nhat system prompt!")
-
-async def reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id in user_
-        user_data[user_id]["messages"] = []
-        await update.message.reply_text("✅ Da reset lich su chat!")
-    else:
-        await update.message.reply_text("Chua co lich su chat.")
-
-async def remember(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if not context.args:
-        memory, _ = load_memory(user_id)
-        if not memory:
-            await update.message.reply_text("Memory trong. Vi du: /remember ten=Nam")
-            return
-        text = "🧠 Memory:\n\n"
-        for k, v in memory.items():
-            text += "- " + k + ": " + str(v) + "\n"
-        await update.message.reply_text(text)
-        return
-    args = " ".join(context.args)
-    memory, _ = load_memory(user_id)
-    if "=" in args:
-        k, v = args.split("=", 1)
-        memory[k.strip()] = v.strip()
-        save_memory(user_id, memory)
-        await update.message.reply_text("✅ Da luu: " + k.strip() + " = " + v.strip())
-    else:
-        await update.message.reply_text("Dung: /remember key=value")
-
-async def forget(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if not context.args:
-        await update.message.reply_text("Dung: /forget key (hoac /forget all)")
-        return
-    key = context.args[0]
-    memory, _ = load_memory(user_id)
-    if key == "all":
-        save_memory(user_id, {})
-        await update.message.reply_text("✅ Da xoa toan bo memory!")
-    elif key in memory:
-        del memory[key]
-        save_memory(user_id, memory)
-        await update.message.reply_text("✅ Da xoa: " + key)
-    else:
-        await update.message.reply_text("Khong tim thay: " + key)
-
-async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Dung: /search [tu khoa]")
-        return
-    query = " ".join(context.args)
-    await update.message.reply_chat_action("typing")
-    raw = web_search(query)
-    await update.message.reply_text("🔍 " + query + "\n\n" + raw)
-
-async def imagine_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Dung: /imagine [mo ta]")
-        return
-    prompt = " ".join(context.args)
-    await update.message.reply_text("🎨 Dang tao anh...")
-    await update.message.reply_chat_action("upload_photo")
-    result = tao_anh(prompt)
-    if isinstance(result, bytes):
-        await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
-    else:
-        await update.message.reply_text(result)
-
-async def anime(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Dung: /anime [mo ta]")
-        return
-    prompt = " ".join(context.args)
-    await update.message.reply_photo(photo=tao_anh(prompt, "anime"))
-
-async def real(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Dung: /real [mo ta]")
-        return
-    prompt = " ".join(context.args)
-    await update.message.reply_photo(photo=tao_anh(prompt, "real"))
-
-async def cinematic(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Dung: /cinematic [mo ta]")
-        return
-    prompt = " ".join(context.args)
-    await update.message.reply_photo(photo=tao_anh(prompt, "cinematic"))
-
-# ===== ORCHESTRATOR COMMANDS =====
-
-async def enable_orchestrator(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    orchestrator_sessions[user_id] = True
-    await update.message.reply_text(
-        "🧠 CHE DO ORCHESTRATOR DA BAT!\n\n"
-        "Bot se su dung multi-agent workflow:\n"
-        "1. ANALYST - Phan tich yeu cau\n"
-        "2. RESEARCHER - Tim kiem thong tin\n"
-        "3. CODER - Viet code\n"
-        "4. WRITER - Soan thao noi dung\n"
-        "5. CRITIC - Kiem tra va hoan thien\n\n"
-        "Gui yeu cau cua ban de bat dau!"
+        "👋 Chào mừng đến với Multi-Agent Bot!\n\n"
+        "Các lệnh khả dụng:\n"
+        "/orchestrator - Bật chế độ suy nghĩ đa tác tử\n"
+        "/myagents - Xem danh sách agent\n"
+        "/memory - Xem lịch sử chat\n"
+        "/clear - Xóa lịch sử chat\n"
+        "\nGửi tin nhắn bất kỳ để bắt đầu!"
     )
 
 async def my_agents(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if orchestrator_sessions.get(user_id):
-        await update.message.reply_text("✅ Che do Orchestrator: BAT")
-    else:
-        await update.message.reply_text("❌ Che do Orchestrator: TAT\nDung /orchestrator de bat.")
-
-async def files(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not GITHUB_REPO:
-        await update.message.reply_text("Chua cai dat GITHUB_REPO")
-        return
-    result = list_files()
-    if not result:
-        await update.message.reply_text("Khong lay duoc danh sach file")
-        return
-    text = "📁 Files:\n\n"
-    for item in result:
-        icon = "📂" if item["type"] == "dir" else "📄"
-        text += icon + " " + item["name"] + "\n"
-    await update.message.reply_text(text)
-
-async def read_file_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Dung: /read ten_file")
-        return
-    path = context.args[0]
-    content, _ = get_file(path)
-    if content:
-        if len(content) > 4000:
-            content = content[:4000] + "... (file qua dai)"
-        await update.message.reply_text("📄 " + path + ":\n\n" + content)
-    else:
-        await update.message.reply_text("Khong tim thay file: " + path)
-
-async def edit_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Dung: /edit ten_file")
-        return
-    user_id = update.message.from_user.id
-    path = context.args[0]
-    content, sha = get_file(path)
-    if content is None:
-        await update.message.reply_text("Khong tim thay file: " + path)
-        return
-    edit_state[user_id] = {"mode": "edit", "path": path, "sha": sha}
-    await update.message.reply_text(
-        "✏️ Dang edit: " + path + "\n"
-        "Gui noi dung moi (toan bo file).\n"
-        "Dung /cancel de huy."
+    text = (
+        "🤖 **DANH SÁCH AGENT**\n\n"
+        "1. **ANALYST**: Phân tích vấn đề phức tạp.\n"
+        "2. **RESEARCHER**: Tìm kiếm thông tin chính xác.\n"
+        "3. **CODER**: Viết và sửa code.\n"
+        "4. **WRITER**: Soạn thảo văn bản.\n"
+        "5. **CRITIC**: Kiểm tra chất lượng đầu ra.\n\n"
+        "Hệ thống tự động điều phối các agent này khi bạn yêu cầu."
     )
+    await update.message.reply_text(text, parse_mode='Markdown')
 
-async def push_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args:
-        await update.message.reply_text("Dung: /push ten_file")
+async def show_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    history = memory_db.get(user_id, limit=10)
+    
+    if not history:
+        await update.message.reply_text("📭 Chưa có lịch sử trò chuyện nào.")
         return
-    user_id = update.message.from_user.id
-    path = context.args[0]
-    edit_state[user_id] = {"mode": "create", "path": path}
-    await update.message.reply_text(
-        "📝 Dang tao: " + path + "\n"
-        "Gui noi dung file.\n"
-        "Dung /cancel de huy."
-    )
+    
+    text = "📜 **LỊCH SỬ GẦN ĐÂY**\n\n"
+    for h in history:
+        time_str = h['time'].split('T')[1][:5]
+        text += f"[{time_str}] {h['text'][:50]}...\n"
+    
+    await update.message.reply_text(text, parse_mode='Markdown')
 
-async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    if user_id in edit_state:
-        del edit_state[user_id]
-        await update.message.reply_text("✅ Da huy.")
-    elif orchestrator_sessions.get(user_id):
-        orchestrator_sessions[user_id] = False
-        await update.message.reply_text("✅ Da tat che do Orchestrator.")
+async def clear_memory(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if str(user_id) in memory_db.memory:
+        del memory_db.memory[str(user_id)]
+        memory_db.save_to_github()
+        await update.message.reply_text("🗑️ Đã xóa lịch sử trò chuyện của bạn.")
     else:
-        await update.message.reply_text("Khong co gi de huy.")
+        await update.message.reply_text("Không có gì để xóa.")
 
-async def xu_ly_anh(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    photo = await update.message.photo[-1].get_file()
-    image_bytes = await photo.download_as_bytearray()
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_input = update.message.text
+    user_id = update.effective_user.id
+    
+    # Lưu vào memory
+    memory_db.add(user_id, user_input)
+    
+    # Gửi trạng thái đang gõ
+    await update.message.chat.send_action(action='typing')
+    
+    # Xử lý logic Orchestrator
+    response_text = await handle_orchestrator_logic(user_input, user_id)
+    
+    # Trả lời
+    await update.message.reply_text(response_text)
 
-    await update.message.reply_chat_action("typing")
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    logger.error(f"Update {update} caused error {context.error}")
+    if update and update.message:
+        await update.message.reply_text("Đã xảy ra lỗi trong quá trình xử lý. Vui lòng thử lại.")
 
-    # Kiem tra neu co trong mode orchestrator
-    if orchestrator_sessions.get(user_id):
-        # Trong mode orchestrator, dung CODER agent de phan tich
-        result = await run_orchestrator(
-            f"Phan tich anh nay: {update.message.caption or 'Mo ta chi tiet anh'}",
-            user_data.get(user_id, {}).get("model_id", models[0]["id"]),
-            user_id
-        )
-        await update.message.reply_text("🧠 [ORCHESTRATOR]:\n\n" + result)
-    else:
-        result = phan_tich_anh(bytes(image_bytes))
-        await update.message.reply_text("📷 Phan tich:\n\n" + result)
+# --- MAIN ---
+def main():
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("orchestrator", start)) # Alias
+    app.add_handler(CommandHandler("myagents", my_agents))
+    app.add_handler(CommandHandler("memory", show_memory))
+    app.add_handler(CommandHandler("clear", clear_memory))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    
+    app.add_error_handler(error_handler)
+    
+    logger.info("Bot đang chạy...")
+    app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-async def xu_ly_tin_nhan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.message.from_user.id
-    tin_nhan = update.message.text
-
-    # PRO MEETING
-    if is_meeting_prompt(tin_nhan) and user_id in meeting_sessions:
-        roles = ["CEO", "CTO", "CMO", "CFO"]
-        result = await run_roles(roles, tin_nhan, user_data.get(user_id, {}).get("model_id", models[0]["id"]))
-        await update.message.reply_text("🧠 PRO MEETING:\n\n" + result)
-        meeting_sessions[user_id] = False
-        await update.message.reply_text("✅ PRO MEETING đã hoàn thành! Kết quả đã được gửi riêng.")
-        return
-
-    # ===== ORCHESTRATOR MODE =====
-    if orchestrator_sessions.get(user_id):
-        if is_stop_meeting_prompt(tin_nhan) or tin_nhan.lower() in ["stop", "ngung", "off", "tat"]:
-            orchestrator_sessions[user_id] = False
-            await update.message.reply_text("✅ Da tat che do Orchestrator.")
-            return
-
-        await update.message.reply_chat_action("typing")
-        model_id = user_data.get(user_id, {}).get("model_id")
-
-        if not model_id:
-            await update.message.reply_text("Chua chon model! Dung /model truoc.")
-            return
-
-        # Chay ORCHESTRATOR workflow
-        result = await run_orchestrator(tin_nhan, model_id, user_id)
-
-        if len(result) > 4096:
-            result = result[:4090] + "..."
-
-        await update.message.reply_text("🧠 [ORCHESTRATOR]:\n\n" + result)
-        return
-
-    # Che do edit/create file
-    if user_id in edit_state:
-        state = edit_state[user_id]
-        if state["mode"] == "edit":
-            success = update_file(state["path"], tin_nhan, state["sha"])
-            del edit_state[user_id]
-            await update.message.reply_text("✅ Da cap nhat " + state["path"] + "!" if success else "❌ Loi cap nhat!")
-        elif state["mode"] == "create":
-            success = create_file_github(state["path"], tin_nhan)
-            del edit_state[user_id]
-            await update.message.reply_text("✅ Da tao " + state["path"] + "!" if success else "❌ Loi tao file!")
-        return
-
-    # Lenh tat (khong can /)
-    tin_lower = tin_nhan.strip().lower()
-
-    if tin_lower.startswith("anime "):
-        prompt = tin_nhan[6:].strip()
-        await update.message.reply_photo(photo=tao_anh(prompt, "anime"))
-        return
-
-    if tin_lower.startswith("real "):
-        prompt = tin_nhan[5:].strip()
-        await update.message.reply_photo(photo=tao_anh(prompt, "real"))
-        return
-
-    if tin_lower.startswith("cinematic "):
-        prompt = tin_nhan[10:].strip()
-        await update.message.reply_photo(photo=tao_anh(prompt, "cinematic"))
-        return
-
-    if tin_lower.startswith("imagine "):
-        prompt = tin_nhan[8:].strip()
-        await update.message.reply_text("🎨 Dang tao anh...")
-        await update.message.reply_chat_action("upload_photo")
-        result = tao_anh(prompt)
-        if isinstance(result, bytes):
-            await update.message.reply_photo(photo=result, caption="🎨 " + prompt)
-        else:
-            await update.message.reply_text(result)
-        return
-
-    if tin_lower.startswith("search "):
-        query = tin_nhan[7:].strip()
-        await update.message.reply_chat_action("typing")
-        raw = web_search(query)
-        await update.message.reply_text("🔍 " + query + "\n\n" + raw)
-        return
-    if tin_lower.startswith("remember "):
-        args = tin_nhan[9:].strip().split()
-        memory, _ = load_memory(user_id)
-        for arg in args:
-            if "=" in arg:
-                k, v = arg.split("=", 1)
-                memory[k.strip()] = v.strip()
-        save_memory(user_id, memory)
-        await update.message.reply_text("✅ Da luu memory!")
-        return
-
-    if tin_lower == "remember":
-        memory, _ = load_memory(user_id)
-        if not memory:
-            await update.message.reply_text("Memory trong. Vi du: remember ten=Nam")
-            return
-        text = "🧠 Memory:\n\n"
-        for k, v in memory.items():
-            text += "- " + k + ": " + str(v) + "\n"
-        await update.message.reply_text(text)
-        return
-
-    if tin_lower.startswith("forget "):
-        key = tin_nhan[7:].strip()
-        if key == "all":
-            save_memory(user_id, {})
-            await update.message.reply_text("✅ Da xoa toan bo memory!")
-        else:
-            memory, _ = load_memory(user_id)
-            if key in memory:
-                del memory[key]
-                save_memory(user_id, memory)
-                await update.message.reply_text("✅ Da xoa: " + key)
-            else:
-                await update.message.reply_text("Khong tim thay: " + key)
-        return
-
-    # Chat AI
-    if user_id not in user_data or not user_data[user_id].get("model_id"):
-        await update.message.reply_text("Chua chon model! Dung /model truoc.")
-        return
-
-    d = user_data[user_id]
-    d["messages"].append({"role": "user", "content": tin_nhan})
-    await update.message.reply_chat_action("typing")
-
-    messages_to_send = []
-    memory, _ = load_memory(user_id)
-    memory_text = memory_to_system(memory)
-    system_parts = [SKILLS_SYSTEM]
-    if d.get("system_prompt"):
-        system_parts.append(d["system_prompt"])
-    if memory_text:
-        system_parts.append(memory_text)
-    messages_to_send.append({"role": "system", "content": "\n\n".join(system_parts)})
-    messages_to_send.extend(d["messages"])
-
-    tra_loi, err_type = await goi_nvidia(d["model_id"], messages_to_send)
-
-    if err_type == "timeout":
-        d["messages"].pop()
-        await update.message.reply_text("⏱ Timeout! Thu lai hoac doi /model khac.")
-        return
-    if err_type == "error":
-        d["messages"].pop()
-        await update.message.reply_text("❌ Loi: " + tra_loi)
-        return
-
-    skill_done, skill_text = await xu_ly_skill(update, tra_loi, user_id)
-
-    cleaned_tra_loi = tra_loi
-    if skill_text:
-        cleaned_tra_loi = cleaned_tra_loi.replace(skill_text, "").strip()
-
-    d["messages"].append({"role": "assistant", "content": cleaned_tra_loi if cleaned_tra_loi else tra_loi})
-
-    if skill_done:
-        if cleaned_tra_loi:
-            await update.message.reply_text(d["model_name"] + ":\n\n" + cleaned_tra_loi)
-        return
-
-    if not cleaned_tra_loi.strip():
-         # If skill was done, we already sent the skill result, so just return
-         if skill_done:
-             return
-         await update.message.reply_text("🤖 Đã có lỗi khi thực hiện tác vụ. Vui lòng thử lại.")
-         return
-
-    if len(cleaned_tra_loi) > 4096:
-        cleaned_tra_loi = cleaned_tra_loi[:4090] + "..."
-    await update.message.reply_text(d["model_name"] + ":\n\n" + cleaned_tra_loi)
-
-# ===== CHAY BOT =====
-print("Dang load user data tu GitHub...")
-load_user_data()
-print("Bot dang chay...")
-
-app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
-app.add_handler(CommandHandler("start", start))
-app.add_handler(CommandHandler("model", chon_model))
-app.add_handler(CommandHandler("mymodel", my_model))
-app.add_handler(CommandHandler("system", set_system))
-app.add_handler(CommandHandler("reset", reset))
-app.add_handler(CommandHandler("remember", remember))
-app.add_handler(CommandHandler("forget", forget))
-app.add_handler(CommandHandler("search", search_command))
-app.add_handler(CommandHandler("imagine", imagine_command))
-app.add_handler(CommandHandler("anime", anime))
-app.add_handler(CommandHandler("real", real))
-app.add_handler(CommandHandler("cinematic", cinematic))
-app.add_handler(CommandHandler("orchestrator", enable_orchestrator))
-app.add_handler(CommandHandler("myagents", my_agents))
-app.add_handler(CommandHandler("files", files))
-app.add_handler(CommandHandler("read", read_file_command))
-app.add_handler(CommandHandler("edit", edit_file))
-app.add_handler(CommandHandler("push", push_file))
-app.add_handler(CommandHandler("cancel", cancel))
-app.add_handler(CallbackQueryHandler(xu_ly_chon_model, pattern="^model_"))
-app.add_handler(MessageHandler(filters.PHOTO, xu_ly_anh))
-app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, xu_ly_tin_nhan))
-
-app.run_polling()
+if __name__ == '__main__':
+    main()
