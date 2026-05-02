@@ -68,7 +68,7 @@ class Config:
 
     # AI settings
     nvidia_api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
-    model: str = "meta/llama-3.1-70b-instruct"
+    model: str = "meta/llama-4-maverick-17b-128e-instruct"
     temperature: float = 0.7
     max_tokens: int = 1500
     request_timeout: int = 45
