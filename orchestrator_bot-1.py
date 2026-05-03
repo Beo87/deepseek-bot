@@ -135,7 +135,7 @@ class Config:
 
     # AI — text model
     nvidia_api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
-    model: str = "meta/llama-3.1-70b-instruct"
+    model: str = "meta/llama-4-maverick-17b-128e-instruct"
     # AI — vision model (hỗ trợ ảnh)
     vision_model: str = "meta/llama-3.2-90b-vision-instruct"
 
