@@ -68,7 +68,7 @@ class Config:
 
     # AI settings
     nvidia_api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
-    model: str = "stepfun-ai/step-3.5-flash"
+    model: str = "minimaxai/minimax-m2.7"
     temperature: float = 0.7
     max_tokens: int = 1500
     request_timeout: int = 45
