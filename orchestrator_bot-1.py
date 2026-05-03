@@ -26,7 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional
 
-import httpx
+import aiohttp
 from telegram import BotCommand, Update
 from telegram.constants import ParseMode
 from telegram.error import Conflict, NetworkError, TelegramError
@@ -173,18 +173,18 @@ class MemorySystem:
             return
 
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
-                resp = await client.get(self._gh_url(), headers=self._gh_headers())
-                if resp.status_code == 200:
-                    payload = resp.json()
-                    raw = base64.b64decode(payload["content"]).decode("utf-8")
-                    async with self._lock:
-                        self._data = json.loads(raw)
-                    logger.info(f"✅ Đã tải memory từ GitHub ({len(self._data)} users)")
-                elif resp.status_code == 404:
-                    logger.info("memory.json chưa tồn tại trên GitHub — sẽ tạo khi lưu lần đầu")
-                else:
-                    logger.warning(f"GitHub load trả về status {resp.status_code}")
+            async with aiohttp.ClientSession() as session:
+                async with session.get(self._gh_url(), headers=self._gh_headers(), timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status == 200:
+                        payload = await resp.json()
+                        raw = base64.b64decode(payload["content"]).decode("utf-8")
+                        async with self._lock:
+                            self._data = json.loads(raw)
+                        logger.info(f"✅ Đã tải memory từ GitHub ({len(self._data)} users)")
+                    elif resp.status == 404:
+                        logger.info("memory.json chưa tồn tại trên GitHub — sẽ tạo khi lưu lần đầu")
+                    else:
+                        logger.warning(f"GitHub load trả về status {resp.status}")
         except Exception as e:
             logger.error(f"Lỗi tải memory từ GitHub: {e}")
 
@@ -203,17 +203,18 @@ class MemorySystem:
         }
 
         try:
-            async with httpx.AsyncClient(timeout=15) as client:
+            async with aiohttp.ClientSession() as session:
                 # Lấy SHA để update (nếu file đã tồn tại)
-                check = await client.get(self._gh_url(), headers=self._gh_headers())
-                if check.status_code == 200:
-                    body["sha"] = check.json().get("sha", "")
+                async with session.get(self._gh_url(), headers=self._gh_headers(), timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status == 200:
+                        body["sha"] = (await resp.json()).get("sha", "")
 
-                resp = await client.put(self._gh_url(), json=body, headers=self._gh_headers())
-                if resp.status_code in (200, 201):
-                    logger.debug("✅ Memory đã lưu lên GitHub")
-                else:
-                    logger.error(f"Lỗi lưu GitHub {resp.status_code}: {resp.text[:200]}")
+                async with session.put(self._gh_url(), json=body, headers=self._gh_headers(), timeout=aiohttp.ClientTimeout(total=15)) as resp:
+                    if resp.status in (200, 201):
+                        logger.debug("✅ Memory đã lưu lên GitHub")
+                    else:
+                        text = await resp.text()
+                        logger.error(f"Lỗi lưu GitHub {resp.status}: {text[:200]}")
         except Exception as e:
             logger.error(f"Lỗi kết nối GitHub khi lưu: {e}")
 
@@ -333,38 +334,40 @@ class AIEngine:
         }
 
         last_error: str = "Lỗi không xác định"
+        timeout = aiohttp.ClientTimeout(total=self._cfg.request_timeout)
 
         for attempt in range(retries + 1):
             try:
-                async with httpx.AsyncClient(timeout=self._cfg.request_timeout) as client:
-                    resp = await client.post(
+                async with aiohttp.ClientSession() as session:
+                    async with session.post(
                         self._cfg.nvidia_api_url,
                         json=payload,
                         headers=self._headers,
-                    )
-                    if resp.status_code == 429:
-                        return "⏳ API đang quá tải. Vui lòng thử lại sau vài giây."
-                    if resp.status_code == 401:
-                        return "❌ NVIDIA API Key không hợp lệ hoặc đã hết hạn."
-                    if resp.status_code >= 500:
-                        last_error = f"Server NVIDIA lỗi (HTTP {resp.status_code})"
-                        await asyncio.sleep(2 ** attempt)
-                        continue
+                        timeout=timeout,
+                    ) as resp:
+                        if resp.status == 429:
+                            return "⏳ API đang quá tải. Vui lòng thử lại sau vài giây."
+                        if resp.status == 401:
+                            return "❌ NVIDIA API Key không hợp lệ hoặc đã hết hạn."
+                        if resp.status >= 500:
+                            last_error = f"Server NVIDIA lỗi (HTTP {resp.status})"
+                            await asyncio.sleep(2 ** attempt)
+                            continue
 
-                    resp.raise_for_status()
-                    data = resp.json()
+                        resp.raise_for_status()
+                        data = await resp.json()
 
-                    choices = data.get("choices", [])
-                    if not choices:
-                        return "⚠️ API không trả về kết quả hợp lệ."
+                        choices = data.get("choices", [])
+                        if not choices:
+                            return "⚠️ API không trả về kết quả hợp lệ."
 
-                    return choices[0]["message"]["content"].strip()
+                        return choices[0]["message"]["content"].strip()
 
-            except httpx.TimeoutException:
+            except asyncio.TimeoutError:
                 last_error = "timeout"
                 logger.warning(f"API timeout (attempt {attempt + 1}/{retries + 1})")
                 await asyncio.sleep(1)
-            except httpx.HTTPError as e:
+            except aiohttp.ClientError as e:
                 last_error = str(e)
                 logger.error(f"Lỗi mạng khi gọi API: {e}")
                 await asyncio.sleep(1)
@@ -600,7 +603,6 @@ class OrchestratorBot:
             ApplicationBuilder()
             .token(self._cfg.telegram_token)
             .concurrent_updates(True)
-            .post_init(self._post_init)
             .build()
         )
 
@@ -621,33 +623,32 @@ class OrchestratorBot:
 
         return app
 
-    async def _post_init(self, app: Application) -> None:
-        """
-        Hook chạy SAU khi Application khởi tạo, TRƯỚC khi polling.
-        Cách duy nhất an toàn để chạy async setup trong PTB v20+.
-        """
-        logger.info("🔧 Đang khởi tạo bot...")
+    async def run(self) -> None:
+        """Load memory → set commands → start polling."""
+        logger.info("🚀 Đang khởi động bot...")
+
+        # Load memory từ GitHub (nếu có)
         await self._memory.load()
+
+        app = self.build_app()
+
+        # Set bot commands menu
         await app.bot.set_my_commands([
-            BotCommand("start",  "Màn hình chào mừng"),
-            BotCommand("agents", "Danh sách agent"),
-            BotCommand("memory", "Xem lịch sử chat"),
-            BotCommand("clear",  "Xóa lịch sử"),
-            BotCommand("stats",  "Thống kê sử dụng"),
-            BotCommand("help",   "Hướng dẫn sử dụng"),
+            BotCommand("start",   "Màn hình chào mừng"),
+            BotCommand("agents",  "Danh sách agent"),
+            BotCommand("memory",  "Xem lịch sử chat"),
+            BotCommand("clear",   "Xóa lịch sử"),
+            BotCommand("stats",   "Thống kê sử dụng"),
+            BotCommand("help",    "Hướng dẫn sử dụng"),
         ])
+
         logger.info(f"✅ Bot sẵn sàng | Model: {self._cfg.model}")
 
-    def run(self) -> None:
-        """
-        PTB v20+ tự quản lý event loop nội bộ.
-        KHÔNG dùng asyncio.run() hay await run_polling().
-        """
-        app = self.build_app()
-        # run_polling() là synchronous — tự tạo & quản lý event loop
-        app.run_polling(
+        # Polling với drop_pending_updates để tránh lỗi Conflict
+        await app.run_polling(
             drop_pending_updates=True,
             allowed_updates=Update.ALL_TYPES,
+            close_loop=False,
         )
 
 
@@ -658,8 +659,9 @@ class OrchestratorBot:
 def main() -> None:
     config = Config.from_env()
     bot = OrchestratorBot(config)
+
     try:
-        bot.run()   # ← synchronous, KHÔNG asyncio.run()
+        asyncio.run(bot.run())
     except KeyboardInterrupt:
         logger.info("⛔ Bot đã dừng bởi người dùng (Ctrl+C)")
     except Exception as e:
