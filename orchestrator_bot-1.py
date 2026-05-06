@@ -827,43 +827,90 @@ class OrchestratorBot:
 
     # ── Photo handler ──────────────────────────────────────────
 
-    async def handle_photo(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
-        user = update.effective_user
-        message = update.message
+async def handle_photo(self, update: Update, ctx: ContextTypes.DEFAULT_TYPE) -> None:
+    user = update.effective_user
+    message = update.message
 
-        wait = self._check_rate(user.id)
-        if wait:
-            await message.reply_text(f"⏳ Chờ *{wait}* giây.", parse_mode=ParseMode.MARKDOWN)
-            return
+    wait = self._check_rate(user.id)
+    if wait:
+        await message.reply_text(f"⏳ Chờ *{wait}* giây.", parse_mode=ParseMode.MARKDOWN)
+        return
 
-        await message.chat.send_action("typing")
-        logger.info(f"[PHOTO] User {user.id}")
+    await message.chat.send_action("typing")
+    logger.info(f"[PHOTO] User {user.id}")
 
-        # Caption là yêu cầu của user
-        caption = (message.caption or "").strip()
-        prompt = caption if caption else "Hãy phân tích ảnh này chi tiết."
+    # Caption là yêu cầu của user
+    caption = (message.caption or "").strip()
+    prompt = caption if caption else "Hãy phân tích ảnh này chi tiết."
 
-        status_msg = await message.reply_text("🔍 Đang phân tích ảnh...")
+    status_msg = await message.reply_text("🔍 Đang phân tích ảnh...")
 
-        try:
-            # Lấy ảnh có độ phân giải cao nhất
-            best_photo = max(message.photo, key=lambda p: p.file_size or 0)
-            img_b64, media_type = await FileProcessor.process_photo(best_photo, ctx.bot)
+    try:
+        # Lấy ảnh có độ phân giải cao nhất
+        best_photo = max(message.photo, key=lambda p: p.file_size or 0)
+        img_b64, media_type = await FileProcessor.process_photo(best_photo, ctx.bot)
 
-            response = await self._ai.complete_vision(prompt, img_b64, media_type)
+        # Chuyển ảnh sang grayscale và trích xuất văn bản
+        extracted_text = await self._extract_text_from_image(best_photo, ctx.bot)
 
-            await status_msg.delete()
+        # Gửi ảnh grayscale
+        await self._send_grayscale_image(message, best_photo, ctx.bot)
 
-            # Lưu vào memory
-            await self._memory.add(user.id, f"[Ảnh] {caption or 'Phân tích ảnh'}")
+        response = await self._ai.complete_vision(prompt, img_b64, media_type)
 
-            # Xuất file nếu cần
-            sent_file = await self._maybe_send_files(message, response, prompt)
-            await self._send_long(message, response)
+        # Thêm văn bản trích xuất được vào response nếu có
+        if extracted_text:
+            response += f"\n\n📝 Văn bản trong ảnh: {extracted_text}"
 
-        except Exception as e:
-            logger.error(f"Lỗi xử lý ảnh: {e}")
-            await status_msg.edit_text(f"❌ Không thể xử lý ảnh: {e}")
+        await status_msg.delete()
+
+        # Lưu vào memory
+        await self._memory.add(user.id, f"[Ảnh] {caption or 'Phân tích ảnh'}")
+
+        # Xuất file nếu cần
+        sent_file = await self._maybe_send_files(message, response, prompt)
+        await self._send_long(message, response)
+
+    except Exception as e:
+        logger.error(f"Lỗi xử lý ảnh: {e}")
+        await status_msg.edit_text(f"❌ Không thể xử lý ảnh: {e}")
+
+async def _extract_text_from_image(self, photo, bot):
+    try:
+        # Tải ảnh
+        file = await bot.get_file(photo.file_id)
+        img_path = await file.download_to_drive()
+
+        # Sử dụng OpenCV và pytesseract để trích xuất văn bản
+        import cv2
+        import pytesseract
+
+        img = cv2.imread(img_path)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        extracted_text = pytesseract.image_to_string(gray, lang='vie')  # Giả sử văn bản là tiếng Việt
+
+        return extracted_text.strip()
+    except Exception as e:
+        logger.error(f"Lỗi trích xuất văn bản: {e}")
+        return ""
+
+async def _send_grayscale_image(self, message, photo, bot):
+    try:
+        # Tải ảnh
+        file = await bot.get_file(photo.file_id)
+        img_path = await file.download_to_drive()
+
+        # Chuyển ảnh sang grayscale
+        import cv2
+        img = cv2.imread(img_path)
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        gray_path = "gray_" + file.file_path.split("/")[-1]
+        cv2.imwrite(gray_path, gray)
+
+        # Gửi ảnh grayscale
+        await message.reply_photo(open(gray_path, 'rb'))
+    except Exception as e:
+        logger.error(f"Lỗi gửi ảnh grayscale: {e}")
 
     # ── Document handler ───────────────────────────────────────
 
