@@ -38,6 +38,42 @@ if not TELEGRAM_TOKEN or not NVIDIA_API_KEY:
     print("   export NVIDIA_API_KEY='your_nvidia_key_here'")
     exit(1)
 
+
+class Config:
+    """Configuration holder for the bot"""
+    
+    def __init__(self, telegram_token: str, nvidia_api_key: str, 
+                 github_token: Optional[str] = None,
+                 github_repo: str = "ai-bot-memory",
+                 github_owner: str = "your-github-username"):
+        self.telegram_token = telegram_token
+        self.nvidia_api_key = nvidia_api_key
+        self.github_token = github_token
+        self.github_repo = github_repo
+        self.github_owner = github_owner
+    
+    @classmethod
+    def from_env(cls) -> "Config":
+        """Create Config from environment variables"""
+        return cls(
+            telegram_token=os.getenv("TELEGRAM_TOKEN", ""),
+            nvidia_api_key=os.getenv("NVIDIA_API_KEY", ""),
+            github_token=os.getenv("GITHUB_TOKEN"),
+            github_repo=os.getenv("GITHUB_REPO", "ai-bot-memory"),
+            github_owner=os.getenv("GITHUB_OWNER", "your-github-username"),
+        )
+    
+    def to_dict(self) -> Dict[str, str]:
+        """Convert config to dictionary"""
+        return {
+            "TELEGRAM_TOKEN": self.telegram_token,
+            "NVIDIA_API_KEY": self.nvidia_api_key,
+            "GITHUB_TOKEN": self.github_token or "",
+            "GITHUB_REPO": self.github_repo,
+            "GITHUB_OWNER": self.github_owner,
+        }
+
+
 # Logging setup
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -376,27 +412,48 @@ async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # ─────────────────────────────────────────────────────
 # MAIN ENTRY POINT
 # ─────────────────────────────────────────────────────
-def main():
+class OrchestratorBot:
+    """Orchestrator Bot - Multi-Agent AI System"""
+    
+    def __init__(self, config: Optional[Dict[str, str]] = None):
+        """Initialize the bot"""
+        self.telegram_token = config.get("TELEGRAM_TOKEN") if config else TELEGRAM_TOKEN
+        self.app = None
+        
+    def run(self) -> None:
+        """Start the bot"""
+        print("🚀 Starting Orchestrator Bot...")
+        print(f"Agents: {', '.join(AGENT_PROMPTS.keys())}")
+        
+        self.app = Application.builder().token(self.telegram_token).build()
+        
+        # Add handlers
+        self.app.add_handler(CommandHandler("start", start_command))
+        self.app.add_handler(CommandHandler("myagents", myagents_command))
+        self.app.add_handler(CommandHandler("memory", memory_command))
+        self.app.add_handler(CommandHandler("clear", clear_command))
+        self.app.add_handler(CommandHandler("orchestrator", orchestrator_command))
+        self.app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+        
+        # Error handler
+        self.app.add_error_handler(error_handler)
+        
+        # Start polling
+        print("✅ Bot is running! Press Ctrl+C to stop.")
+        self.app.run_polling(allowed_updates=Update.ALL_TYPES)
+
+
+def main() -> None:
     """Start the bot"""
-    print("🚀 Starting Orchestrator Bot...")
-    print(f"Agents: {', '.join(AGENT_PROMPTS.keys())}")
-    
-    app = Application.builder().token(TELEGRAM_TOKEN).build()
-    
-    # Add handlers
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("myagents", myagents_command))
-    app.add_handler(CommandHandler("memory", memory_command))
-    app.add_handler(CommandHandler("clear", clear_command))
-    app.add_handler(CommandHandler("orchestrator", orchestrator_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    # Error handler
-    app.add_error_handler(error_handler)
-    
-    # Start polling
-    print("✅ Bot is running! Press Ctrl+C to stop.")
-    app.run_polling(allowed_updates=Update.ALL_TYPES)
+    config = Config.from_env()
+    bot = OrchestratorBot(config)
+    try:
+        bot.run()
+    except KeyboardInterrupt:
+        logger.info("⛔ Bot dừng (Ctrl+C)")
+    except Exception as e:
+        logger.critical(f"💥 Bot crash: {e}", exc_info=True)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
