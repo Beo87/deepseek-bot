@@ -662,6 +662,55 @@ class AIEngine:
         }
         return await self._call(payload, retries=retries)
 
+    async def generate_search_query(
+        self,
+        ocr_text: str,
+        user_prompt: str,
+        *,
+        retries: int = 1,
+    ) -> str:
+        """
+        Dùng AI sinh ra search query chính xác từ nội dung OCR.
+        Tránh dùng regex vì dễ bắt nhầm tên import/framework.
+        """
+        if not self._cfg.nvidia_api_key:
+            return user_prompt or "code analysis"
+
+        payload = {
+            "model": self._cfg.model,
+            "messages": [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a search query generator. "
+                        "Given OCR-extracted content, output ONLY a short, focused search query "
+                        "(max 8 words) suitable for finding relevant documentation, "
+                        "StackOverflow answers, or GitHub examples. "
+                        "Focus on: the core problem/concept, NOT import names or framework names. "
+                        "If content is Vietnamese text, generate query in Vietnamese. "
+                        "Output the query only — no explanation, no quotes."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": (
+                        f"OCR content (first 500 chars):\n{ocr_text[:500]}\n\n"
+                        f"User request: {user_prompt or '(none)'}\n\n"
+                        "Generate ONE focused search query:"
+                    ),
+                },
+            ],
+            "temperature": 0.2,
+            "max_tokens": 30,
+        }
+        result = await self._call(payload, retries=retries)
+        # Làm sạch output — bỏ dấu nháy, xuống dòng
+        query = result.strip().strip("\"'").split("\n")[0].strip()
+        # Fallback nếu AI trả về rác
+        if len(query) < 3 or len(query) > 120:
+            return user_prompt or "code analysis best practices"
+        return query
+
     async def analyze_with_vision(
         self,
         image_b64: str,
@@ -826,37 +875,12 @@ class SmartAnalyzer:
         self._ai = ai
         self._search = search
 
-    @staticmethod
-    def _extract_search_query(ocr_text: str, user_prompt: str) -> str:
+    async def _generate_search_query(self, ocr_text: str, user_prompt: str) -> str:
         """
-        Trích xuất query tìm kiếm từ nội dung OCR.
-        Ưu tiên: tên function/class/error, import statements, keyword kỹ thuật.
+        Dùng AI sinh query chính xác thay vì regex.
+        Tránh bắt nhầm tên import/framework làm query.
         """
-        # Tìm import statements
-        imports = re.findall(r'(?:import|from)\s+([\w.]+)', ocr_text)
-        # Tìm tên function/class
-        identifiers = re.findall(r'(?:def|class|function|func)\s+(\w+)', ocr_text)
-        # Tìm error messages
-        errors = re.findall(r'(?:Error|Exception|error|exception)[\s:]+([^\n]{5,50})', ocr_text)
-        # Ngôn ngữ lập trình
-        lang_match = re.search(r'LOẠI NỘI DUNG[^\n]*\n([^\n]+)', ocr_text)
-        lang = lang_match.group(1).strip() if lang_match else ""
-
-        parts = []
-        if errors:
-            parts.append(errors[0])
-        if imports:
-            parts.extend(imports[:2])
-        if identifiers:
-            parts.extend(identifiers[:2])
-        if lang:
-            parts.append(lang)
-
-        # Kết hợp với user prompt
-        query_base = " ".join(parts[:4]) if parts else ocr_text[:80]
-        if user_prompt and len(user_prompt) < 100:
-            return f"{query_base} {user_prompt}"
-        return query_base or "code analysis best practices"
+        return await self._ai.generate_search_query(ocr_text, user_prompt)
 
     async def analyze_image(
         self,
@@ -875,8 +899,8 @@ class SmartAnalyzer:
         ocr_text = await self._ai.ocr_image(image_b64, media_type)
         logger.info(f"OCR done: {len(ocr_text)} chars")
 
-        # Bước 2: Web search song song với việc chuẩn bị query
-        search_query = self._extract_search_query(ocr_text, user_prompt)
+        # Bước 2: AI sinh query thông minh (không dùng regex)
+        search_query = await self._generate_search_query(ocr_text, user_prompt)
         if status_callback:
             await status_callback(f"🌐 Bước 2/3 — Tìm kiếm: `{search_query[:60]}`...")
 
@@ -906,8 +930,8 @@ class SmartAnalyzer:
         Pipeline cho file code/text.
         Trả về (analysis, search_results).
         """
-        # Web search dựa trên nội dung file
-        search_query = self._extract_search_query(file_content, user_prompt)
+        # AI sinh query thông minh từ nội dung file
+        search_query = await self._generate_search_query(file_content, user_prompt)
         if search_query:
             if status_callback:
                 await status_callback(f"🌐 Đang tìm tài liệu: `{search_query[:60]}`...")
