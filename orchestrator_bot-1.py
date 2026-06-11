@@ -128,7 +128,7 @@ class Config:
     github_repo: str = "bot-memory"
 
     nvidia_api_url: str = "https://integrate.api.nvidia.com/v1/chat/completions"
-    model: str = "meta/llama-3.1-70b-instruct"
+    model: str = "nvidia/nemotron-3-ultra-550b-a55b"
     vision_model: str = "meta/llama-3.2-90b-vision-instruct"
 
     temperature: float = 0.6
